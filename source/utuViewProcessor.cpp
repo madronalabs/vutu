@@ -2,7 +2,7 @@
 // (c) 2020, Madrona Labs LLC, all rights reserved
 // see LICENSE.txt for details
 
-#include "UtuViewProcessor.h"
+#include "utuViewProcessor.h"
 #include "utuViewController.h"
 #include "utuViewParameters.h"
 
@@ -48,6 +48,14 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "master_volume" },
+    { "range", {-60, 6} },
+    { "log", false },
+    { "plaindefault", -15 },
+    { "units", "dB" }
+  } ) );
+  
 
 
 }
@@ -58,13 +66,16 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 void UtuViewProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused)
 {
   // get params from the SignalProcessor.
-  float f1 = getParam("freq1");
-  float f2 = getParam("freq2");
-  float gain = getParam("gain");
+  float f1 = 220.0;//getParam("freq1");
+  float f2 = 330.0;//getParam("freq2");
+  float gain = getParam("master_volume");
+  float amp = dBToAmp(gain);
+    
+ // std::cout << "gain: " << gain << "\n";
   
   // Running the sine generators makes DSPVectors as output.
   // The input parameter is omega: the frequency in Hz divided by the sample rate.
   // The output sines are multiplied by the gain.
-  outputs[0] = s1(f1/kSampleRate)*gain;
-  outputs[1] = s2(f2/kSampleRate)*gain;
+  outputs[0] = s1(f1/kSampleRate)*amp;
+  outputs[1] = s2(f2/kSampleRate)*amp;
 }

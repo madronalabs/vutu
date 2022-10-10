@@ -37,6 +37,7 @@ public:
   RtAudioProcessor(nInputs, nOutputs, sampleRate)
   {
     buildParameterTree(pdl, _params);
+    setDefaults(_params);
   }
   
   ~UtuViewProcessor() = default;

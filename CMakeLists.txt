@@ -47,6 +47,8 @@ set(madronalib_NAME madrona$<$<CONFIG:Debug>:-debug>)
 message("madronalib headers should be in: " ${MADRONALIB_INCLUDE_DIR} )
 message("madronalib library should be at: " ${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME} )
 
+message("cmake lib dir: " ${CMAKE_INSTALL_FULL_LIBDIR} )
+
 #--------------------------------------------------------------------
 # find mlvg 
 #--------------------------------------------------------------------
@@ -72,7 +74,6 @@ message("mlvg library should be at: " ${MLVG_LIBRARY_DIR}/${mlvg_NAME} )
 #--------------------------------------------------------------------
 
 set (MLVG_SOURCE_DIR "../mlvg/source")
-set (MLVG_PRO_SOURCE_DIR "../mlvg-pro/source")
 
 #--------------------------------------------------------------------
 # compile binary resources
@@ -280,6 +281,21 @@ endif()
      set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
  endif()
  
+ #--------------------------------------------------------------------
+ # libsndfile
+ #--------------------------------------------------------------------
+ 
+ if(MSVC)
+   set(ENABLE_STATIC_RUNTIME OFF CACHE INTERNAL "")
+ endif()
+ set(ENABLE_EXTERNAL_LIBS OFF CACHE INTERNAL "")
+ set(ENABLE_CPACK OFF CACHE INTERNAL "")
+ set(ENABLE_PACKAGE_CONFIG OFF CACHE INTERNAL "")
+ set(BUILD_TESTING OFF CACHE INTERNAL "")
+ set(BUILD_PROGRAMS OFF CACHE INTERNAL "")
+ set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
+ add_subdirectory(source/external/libsndfile)
+ 
 #--------------------------------------------------------------------
 # set source groups for some source above
 #--------------------------------------------------------------------
@@ -326,7 +342,7 @@ elseif(WIN32)
 endif()
 
 # add other external libraries
-target_link_libraries(${target} PRIVATE mlvg nfd juce-core)
+target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile)
 
 if(APPLE)
     # ARC must be off for juce

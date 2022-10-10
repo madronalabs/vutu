@@ -256,13 +256,11 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
 
 void SumuPartialsDisplay::draw(ml::DrawContext dc)
 {
-
   NativeDrawContext* nvg = getNativeContext(dc);
   Rect bounds = getLocalBounds(dc, *this);
   int w = bounds.width();
   int h = bounds.height();
   const int gridSize = dc.coords.gridSizeInPixels;
-  
   
   if(!_pPartials)
   {
