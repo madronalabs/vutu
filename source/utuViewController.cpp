@@ -25,13 +25,19 @@
 #include "miniz.h"
 #include "nfd.h"
 
-// MLTEST #include "AudioFile.h"
+#include <loris/Analyzer.h>
+#include <loris/Channelizer.h>
+#include <loris/Distiller.h>
+#include <loris/FrequencyReference.h>
+#include <loris/PartialList.h>
+#include <loris/SdifFile.h>
+#include <loris/Synthesizer.h>
 
+//#include "AudioFile.h"
 
-//#define JUCE_APP_CONFIG_HEADER "external/juce_core/JuceCoreConfig.h"
-///#include "external/juce_core/juce_core.h"
 
 using namespace ml;
+using namespace utu;
 
 
 //-----------------------------------------------------------------------------
@@ -50,12 +56,16 @@ UtuViewController::~UtuViewController()
 
 }
 
-
 void UtuViewController::_debug()
 {
-  std::cout << "UtuViewController: " << getMessagesAvailable() << " messages in queue. \n";
+//  std::cout << "UtuViewController: " << getMessagesAvailable() << " messages in queue. \n";
 //  std::cout << "UtuViewController @ " << std::hex << (this) << std::dec << " : \n";
 //  std::cout << "        timers @ " << std::hex << (&_timers.get()) << std::dec << "\n";
+}
+
+void UtuViewController::_printToConsole(TextFragment t)
+{
+  sendMessageToActor(_viewName, {"info/set_prop/text", t});
 }
 
 void UtuViewController::_loadFileFromDialog()
@@ -81,15 +91,91 @@ void UtuViewController::_loadFileFromDialog()
     printf("Error: %s\n", NFD_GetError());
   }
   
-  //AudioFile f = AudioFile::forRead(sourcePath);
+  Path filePath(sourcePath.c_str());
+  File f(filePath);
+  if(f)
+  {
+    std::cout << "file to load: " << filePath << "\n";
+    std::cout << "init sr: " << _sample.sampleRate << "\n";
+
+    // load the file
+
+    SF_INFO fileInfo;
+    
+    auto file = sf_open(sourcePath.c_str(), SFM_READ, &fileInfo);
+    
+    std::cout << "        format: " << fileInfo.format << "\n";
+    std::cout << "        frames: " << fileInfo.frames << "\n";
+    std::cout << "        samplerate: " << fileInfo.samplerate << "\n";
+    std::cout << "        channels: " << fileInfo.channels << "\n";
+    
+    constexpr size_t kMaxSeconds = 32;
+    size_t fileSizeInFrames = fileInfo.frames;
+    size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
+
+    size_t framesToRead = std::min(fileSizeInFrames, kMaxFrames);
+
+    size_t kMaxSamples = kMaxFrames*fileInfo.channels;
+    size_t samplesToRead = framesToRead*fileInfo.channels;
+    
+    _printToConsole(TextFragment("loading ", pathToText(filePath), "..."));
+    
+    _sample.data.resize(samplesToRead);
+    float* pData = _sample.data.data();
+    _sample.sampleRate = fileInfo.samplerate;
+    
+    sf_count_t framesRead = sf_readf_float(file, pData, static_cast<sf_count_t>(framesToRead));
+    
+    TextFragment readStatus;
+    if(framesRead != framesToRead)
+    {
+      readStatus = "file read failed!";
+    }
+    else
+    {
+      TextFragment truncatedMsg = (framesToRead == kMaxFrames) ? "(truncated)" : "";
+      readStatus = (TextFragment(textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg ));
+    }
+    
+    _printToConsole(readStatus);
+    sf_close(file);
+        
+    // deinterleave to extract first channel if needed
+    if(fileInfo.channels > 1)
+    {
+      for(int i=0; i < framesRead; ++i)
+      {
+        pData[i] = pData[i*fileInfo.channels];
+      }
+      _sample.data.resize(fileInfo.frames);
+    }
+    
+    // if we have good audio data, send to View and Processor
+    Sample* pSample = &_sample;
+    Value samplePtrValue(&pSample, sizeof(void *));
+    sendMessageToActor(_processorName, {"do/set_audio_data", samplePtrValue});
+    sendMessageToActor(_viewName, {"do/set_audio_data", samplePtrValue});
+  }
+}
+
+
+
+void UtuViewController::analyze()
+{
+  // TEST
+  auto res = params["resolution"].getFloatValue();
+  auto width = params["window_width"].getFloatValue();
+  Loris::Analyzer a(res, width);
   
 }
+
+
 
 void UtuViewController::onMessage(Message m)
 {
   if(!m.address) return;
   
-  std::cout << "UtuViewController::onMessage:" << m.address << " " << m.value << " \n ";
+ // std::cout << "UtuViewController::onMessage:" << m.address << " " << m.value << " \n ";
   
   bool messageHandled{false};
   
@@ -121,7 +207,9 @@ void UtuViewController::onMessage(Message m)
         {
           std::cout << "let's open a file!\n";
           _loadFileFromDialog();
-          messageHandled = false;//true;
+          
+          
+          messageHandled = true;
           break;
         }
         default:

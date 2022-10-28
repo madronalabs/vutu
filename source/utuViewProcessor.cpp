@@ -12,6 +12,7 @@
 #include <iostream>
 
 using namespace ml;
+using namespace utu;
 
 constexpr float kSizeLo = 0, kSizeHi = 40;
 constexpr float kToneLo = 250, kToneHi = 4000;
@@ -78,4 +79,40 @@ void UtuViewProcessor::processVector(MainInputs inputs, MainOutputs outputs, voi
   // The output sines are multiplied by the gain.
   outputs[0] = s1(f1/kSampleRate)*amp;
   outputs[1] = s2(f2/kSampleRate)*amp;
+}
+
+void UtuViewProcessor::onMessage(Message msg)
+{
+  std::cout << "UtuViewProcessor: " << msg.address << " -> " << msg.value << "\n";
+  
+  switch(hash(head(msg.address)))
+  {
+    case(hash("set_param")):
+    {
+      setParam(tail(msg.address), msg.value.getFloatValue());
+      break;
+    }
+    case(hash("set_prop")):
+    {
+      break;
+    }
+    case(hash("do")):
+    {
+      switch(hash(second(msg.address)))
+      {
+        case(hash("set_audio_data")):
+        {
+          // get pointer from message
+          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
+ 
+        }
+      }
+      break;
+    }
+    default:
+    {
+      std::cout << " UtuViewProcessor: uncaught message " << msg << "! \n";
+      break;
+    }
+  }
 }

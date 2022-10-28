@@ -1,7 +1,4 @@
 
-// mlvg: GUI library for madronalib apps
-// (c) 2020, Madrona Labs LLC, all rights reserved
-// see LICENSE.txt for details
 
 #include "sumuPartialsDisplay.h"
 
@@ -262,12 +259,13 @@ void SumuPartialsDisplay::draw(ml::DrawContext dc)
   int h = bounds.height();
   const int gridSize = dc.coords.gridSizeInPixels;
   
+  auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
+  
   if(!_pPartials)
   {
-    auto color = getColorPropertyWithDefault("color", getColor(dc, "mark"));
     nvgBeginPath(nvg);
     nvgRect(nvg, 0, 0, w, h);
-    nvgFillColor(nvg, color);
+    nvgFillColor(nvg, bgColor);
     nvgFill(nvg);
     return;
   }
@@ -287,10 +285,9 @@ void SumuPartialsDisplay::draw(ml::DrawContext dc)
   auto nativeImage = getNativeImageHandle(*_backingLayer);
   
   // paint background color
-  auto color = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
   nvgBeginPath(nvg);
   nvgRect(nvg, 0, 0, w, h);
-  nvgFillColor(nvg, color);
+  nvgFillColor(nvg, bgColor);
   nvgFill(nvg);
   
   

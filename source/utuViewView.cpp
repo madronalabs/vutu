@@ -17,10 +17,13 @@
 #include "MLSerialization.h"
 
 #include "sumuPartialsDisplay.h"
+#include "sampleDisplay.h"
 
 #include "utuViewProcessor.h"
 
 #include "../build/resources/utu-view/resources.c"
+
+using namespace utu;
 
 ml::Rect smallDialRect{0, 0, 1.0, 1.0};
 ml::Rect mediumDialRect{0, 0, 1.5, 1.5};
@@ -81,33 +84,39 @@ void UtuViewView::layoutView()
   
   // buttons
   int centerX = gx/2;
-  float  buttonWidth = 4;
+  float buttonWidth = 4;
   float halfButtonWidth = buttonWidth/2.f;
   float buttonsY1 = bottomY + 1.5;
-  float buttonsY2 = bottomY + 3;
-  float buttonsY3 = bottomY + 4.5;
+  float buttonsY2 = bottomY + 2.5;
+  float buttonsY3 = bottomY + 3.5;
   ml::Rect textButtonRect(0, 0, buttonWidth, 1);
   
   _view->_widgets["open"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + halfButtonWidth, buttonsY1}));
   _view->_widgets["analyze"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY1}));
-  _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth*2 + halfButtonWidth, buttonsY1}));
-
   _view->_widgets["play"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth, buttonsY2}));
   _view->_widgets["synthesize"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + buttonWidth, buttonsY2}));
-
-  // info
+  _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY3}));
   _view->_widgets["info"]->setRectProperty("bounds", ml::Rect(0, bottomY, gx, 1));
+  _view->_widgets["sample"]->setRectProperty("bounds", ml::Rect(0, 0, gx, 2));
+  _view->_widgets["partials"]->setRectProperty("bounds", ml::Rect(0, 2, gx, bottomY - 2));
   
-  // partials
-  _view->_widgets["partials"]->setRectProperty("bounds", ml::Rect(0, 0, gx, bottomY));
+  // resize widgets
+  forEach< Widget >
+  (_view->_widgets, [&](Widget& w)
+   {
+    w.setProperty("visible", true);
+  }
+   );
 }
 
 void UtuViewView::initializeResources(NativeDrawContext* nvg)
 {
   // initialize drawing properties before controls are made
   _drawingProperties.setProperty("mark", colorToMatrix({0.01, 0.01, 0.01, 1.0}));
-  _drawingProperties.setProperty("background", colorToMatrix({0.8, 0.8, 0.8, 1.0}));
-  _drawingProperties.setProperty("draw_background_grid", true);
+  _drawingProperties.setProperty("background", colorToMatrix({0.85, 0.85, 0.85, 1.0}));
+  _drawingProperties.setProperty("panel_bg", colorToMatrix({0.01, 0.01, 0.01, 1.0}));
+  _drawingProperties.setProperty("draw_widget_bounds", true);
+  _drawingProperties.setProperty("draw_widget_outlines", true);
   _drawingProperties.setProperty("common_stroke_width", 1/24.f);
 
   if (nvg)
@@ -200,8 +209,12 @@ void UtuViewView::makeWidgets(const ParameterDescriptionList& pdl)
     { "v_align", "middle" },
     { "text", "utu-view" },
     { "font", "d_din_oblique" },
-    { "text_size", 0.375 },
+    { "text_size", 0.5 },
     { "text_spacing", 0.0f }
+  } );
+  
+  // sample
+  _view->_widgets.add_unique< SampleDisplay >("sample", WithValues{
   } );
   
   // partials
@@ -233,8 +246,6 @@ void UtuViewView::debug()
 
 void UtuViewView::onMessage(Message msg)
 {
-std::cout << "UtuViewView: handleMessage: " << msg.address << " : " << msg.value << "\n";
-  
   if(head(msg.address) == "editor")
   {
     // we are the editor, so remove "editor" and handle message
@@ -245,7 +256,7 @@ std::cout << "UtuViewView: handleMessage: " << msg.address << " : " << msg.value
   {
     case(hash("set_param")):
     {
-      switch(hash(head(tail(msg.address))))
+      switch(hash(second(msg.address)))
       {
         default:
         {
@@ -266,15 +277,35 @@ std::cout << "UtuViewView: handleMessage: " << msg.address << " : " << msg.value
           // to other Widgets so they can synchronize. It's up to individual
           // Widgets to filter out duplicate values.
           _sendParameterMessageToWidgets(msg);
-          break;
         }
-          break;
+        break;
       }
       break;
     }
     case(hash("do")):
     {
-      sendMessageToActor(_controllerName, msg);
+      switch(hash(second(msg.address)))
+      {
+        case(hash("set_audio_data")):
+        {
+          // get Sample pointer
+          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
+          _view->_widgets["sample"]->receiveNamedRawPointer("sample", pSample);
+          
+          break;
+        }
+          
+        default:
+        {
+          // if the message is not from the controller,
+          // forward it to the controller.
+          if(!(msg.flags & kMsgFromController))
+          {
+            sendMessageToActor(_controllerName, msg);
+          }
+          break;
+        }
+      }
       break;
     }
     default:
@@ -282,6 +313,12 @@ std::cout << "UtuViewView: handleMessage: " << msg.address << " : " << msg.value
       // try to forward the message to another receiver
       switch(hash(head(msg.address)))
       {
+        case(hash("info")):
+        {
+          msg.address = tail(msg.address);
+          sendMessage(_view->_widgets["info"], msg);
+          break;
+        }
         case(hash("controller")):
         {
           msg.address = tail(msg.address);

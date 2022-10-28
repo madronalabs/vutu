@@ -11,7 +11,9 @@
 
 cmake_minimum_required (VERSION 3.16)
 
-set(CMAKE_OSX_DEPLOYMENT_TARGET "10.10" CACHE STRING "Minimum OS X deployment version")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11" CACHE STRING "Minimum OS X deployment version")
+
+cmake_policy(SET CMP0114 NEW)
 
 IF(APPLE)
  # uncomment this to build a universal binary for both platforms.
@@ -296,6 +298,7 @@ endif()
  set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
  add_subdirectory(source/external/libsndfile)
  
+ 
 #--------------------------------------------------------------------
 # set source groups for some source above
 #--------------------------------------------------------------------
@@ -315,10 +318,17 @@ create_resources (source/resources build/resources/utu-view)
 file(GLOB LOCAL_SOURCES "${CMAKE_SOURCE_DIR}/source/*.cpp")
 file(GLOB LOCAL_INCLUDES "${CMAKE_SOURCE_DIR}/source/*.h")
 
-list(APPEND app_sources ${LOCAL_SOURCES} )
-list(APPEND app_sources ${LOCAL_INCLUDES} )
+file(GLOB UTU_SOURCES "${CMAKE_SOURCE_DIR}/source/external/utu/*.cpp")
+file(GLOB UTU_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/utu/*.h")
+
+# add utu source
+list(APPEND app_sources ${LOCAL_SOURCES} ${UTU_SOURCES} )
+list(APPEND app_sources ${LOCAL_INCLUDES} ${UTU_INCLUDES} )
 
 add_executable(${target} ${app_sources})
+
+# add utu include dir
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/utu" )
 
 # add SDL2
 find_package(SDL2 REQUIRED)
@@ -342,7 +352,7 @@ elseif(WIN32)
 endif()
 
 # add other external libraries
-target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile)
+target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile loris)
 
 if(APPLE)
     # ARC must be off for juce

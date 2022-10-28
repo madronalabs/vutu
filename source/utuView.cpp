@@ -15,6 +15,9 @@
 #include "utuViewController.h"
 
 
+
+#include <utu/utu.h>
+
 #include "MLSDLUtils.h"
 #include "nfd.h"
 
@@ -78,8 +81,8 @@ int main(int argc, char *argv[])
   // set initial size.
   appView.setSizeInGridUnits({32, 16});
   appView.setGridSizeDefault(30);
-
   
+ 
   SDL_Window *window = initSDLWindow(appView);
   if(window)
   {

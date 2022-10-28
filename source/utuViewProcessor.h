@@ -14,6 +14,8 @@
 #include "MLActor.h"
 #include "MLMath2D.h"
 
+#include "utuDSP.h"
+
 using namespace ml;
 
 constexpr int kMaxProcessBlockFrames = 4096;
@@ -44,5 +46,6 @@ public:
   
   void processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused) override;
 
+  void onMessage(Message msg) override;
 
 };

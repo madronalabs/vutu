@@ -11,8 +11,9 @@
 #include "utuViewParameters.h"
 #include "utuViewProcessor.h"
 #include "utuViewView.h"
+#include "utuDSP.h"
 
-
+#include "sndfile.hh"
 
 using namespace ml;
 
@@ -26,19 +27,21 @@ public:
   
   UtuViewController(TextFragment appName, const ParameterDescriptionList& pdl);
 	~UtuViewController();
-  
 
   // Actor interface
   void onMessage(Message m) override;
 
-  
   // send a ml::Message directly to the Processor.
   void sendMessageToProcessor(Message m);
   
   // update the named collection of files and return a pointer to it.
   FileTree* updateCollection(Path which);
   
+  void analyze();
+  
 private:
+  
+  utu::Sample _sample;
 
   void _loadFileFromDialog();
   
@@ -50,6 +53,6 @@ private:
   
   Timer _debugTimer;
   void _debug();
-  
+  void _printToConsole(TextFragment t);
 
 };
