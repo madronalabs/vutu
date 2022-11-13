@@ -25,13 +25,8 @@
 #include "miniz.h"
 #include "nfd.h"
 
-#include <loris/Analyzer.h>
-#include <loris/Channelizer.h>
-#include <loris/Distiller.h>
-#include <loris/FrequencyReference.h>
-#include <loris/PartialList.h>
-#include <loris/SdifFile.h>
-#include <loris/Synthesizer.h>
+#include <loris.h>
+
 
 //#include "AudioFile.h"
 
@@ -165,7 +160,9 @@ void UtuViewController::analyze()
   // TEST
   auto res = params["resolution"].getFloatValue();
   auto width = params["window_width"].getFloatValue();
-  Loris::Analyzer a(res, width);
+ // Loris::Analyzer a(res, width);
+  
+  analyzer_configure(res, width);
   
 }
 

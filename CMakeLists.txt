@@ -52,6 +52,25 @@ message("madronalib library should be at: " ${MADRONALIB_LIBRARY_DIR}/${madronal
 message("cmake lib dir: " ${CMAKE_INSTALL_FULL_LIBDIR} )
 
 #--------------------------------------------------------------------
+# find loris
+#--------------------------------------------------------------------
+
+if(APPLE)
+    set (LORIS_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/loris")
+    set (LORIS_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
+elseif(WIN32)
+    set (LORIS_INCLUDE_DIR "C:/Program Files/loris/include")
+    set (LORIS_LIBRARY_DIR "C:/Program Files/loris/lib")
+else()
+endif()
+
+# add -debug suffix to link debug loris for debug builds
+set(loris_NAME loris$<$<CONFIG:Debug>:-debug>)
+
+message("loris headers should be in: " ${LORIS_INCLUDE_DIR} )
+message("loris library should be at: " ${LORIS_LIBRARY_DIR}/${loris_NAME} )
+
+#--------------------------------------------------------------------
 # find mlvg 
 #--------------------------------------------------------------------
 
@@ -343,6 +362,14 @@ elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
 endif()
 
+# add loris library
+target_include_directories(${target} PRIVATE ${LORIS_INCLUDE_DIR})
+if(APPLE)
+    target_link_libraries(${target} PRIVATE "${LORIS_LIBRARY_DIR}/lib${loris_NAME}.a")   
+elseif(WIN32)
+    target_link_libraries(${target} PRIVATE "${LORIS_LIBRARY_DIR}/${loris_NAME}.lib")
+endif()
+
 # add mlvg library
 target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 if(APPLE)
@@ -352,7 +379,7 @@ elseif(WIN32)
 endif()
 
 # add other external libraries
-target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile loris)
+target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile)
 
 if(APPLE)
     # ARC must be off for juce

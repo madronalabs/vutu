@@ -11,7 +11,7 @@
 #include "utuViewParameters.h"
 #include "utuViewProcessor.h"
 #include "utuViewView.h"
-#include "utuDSP.h"
+#include "sumuDSP.h"
 
 #include "sndfile.hh"
 
