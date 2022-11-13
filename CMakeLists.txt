@@ -13,7 +13,7 @@ cmake_minimum_required (VERSION 3.16)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11" CACHE STRING "Minimum OS X deployment version")
 
-cmake_policy(SET CMP0114 NEW)
+# cmake_policy(SET CMP0114 NEW)
 
 IF(APPLE)
  # uncomment this to build a universal binary for both platforms.
@@ -334,20 +334,30 @@ set(target utu-view)
 
 create_resources (source/resources build/resources/utu-view)
  
-file(GLOB LOCAL_SOURCES "${CMAKE_SOURCE_DIR}/source/*.cpp")
-file(GLOB LOCAL_INCLUDES "${CMAKE_SOURCE_DIR}/source/*.h")
+file(GLOB COMMON_SOURCES "${CMAKE_SOURCE_DIR}/source/common/*.cpp")
+file(GLOB COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/source/common/*.h")
+
+file(GLOB SUMU_SOURCES "${CMAKE_SOURCE_DIR}/source/external/sumu/*.cpp")
+file(GLOB SUMU_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/sumu/*.h")
 
 file(GLOB UTU_SOURCES "${CMAKE_SOURCE_DIR}/source/external/utu/*.cpp")
 file(GLOB UTU_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/utu/*.h")
 
+file(GLOB WIDGETS_SOURCES "${CMAKE_SOURCE_DIR}/source/widgets/*.cpp")
+file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
+
 # add utu source
-list(APPEND app_sources ${LOCAL_SOURCES} ${UTU_SOURCES} )
-list(APPEND app_sources ${LOCAL_INCLUDES} ${UTU_INCLUDES} )
+list(APPEND app_sources ${COMMON_SOURCES} ${SUMU_SOURCES} ${UTU_SOURCES} ${WIDGETS_SOURCES} )
+list(APPEND app_sources ${COMMON_INCLUDES} ${SUMU_INCLUDES} ${UTU_INCLUDES} ${WIDGETS_INCLUDES} )
 
 add_executable(${target} ${app_sources})
 
-# add utu include dir
+# add include dirs
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source" )
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/common" )
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/sumu" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/utu" )
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
 
 # add SDL2
 find_package(SDL2 REQUIRED)
