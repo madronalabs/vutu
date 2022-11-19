@@ -9,8 +9,8 @@ void SampleDisplay::resize(ml::DrawContext dc)
   NativeDrawContext* nvg = getNativeContext(dc);
 
   // constant background layer size, for now.
-  int w = 564;
-  int h = 170;
+  int w = 2000;
+  int h = 200;
   int bw = 0;
   int bh = 0;
   
@@ -71,18 +71,6 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
   NativeDrawContext* nvg = getNativeContext(dc);
   const int gridSize = dc.coords.gridSizeInPixels;
 
-  if(!_pSample)
-  {
-    /*
-    Rect bounds = getLocalBounds(dc, *this);
-    nvgBeginPath(nvg);
-    nvgRect(nvg, bounds);
-    nvgFillColor(nvg, rgba(0, 0, 0, 1));
-    nvgFill(nvg);
-     */
-    return;
-  }
-  
   if(!_backingLayer) return;
 
   int w = _backingLayer->width;
@@ -100,8 +88,8 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
     nvgFill(nvg);
   }
 
+  if(!_pSample) return;
   size_t frames = _pSample->data.size();
-
 
   Interval xRange{0.f, w - 1.f};
   Interval yRange{h - 1.f, 0.f};
@@ -141,7 +129,6 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
   auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
   std::cout << " sample painting time rough millis: " << roughMillisTotal << "\n";
 
-  
   // end backing layer update
   nvgEndFrame(nvg);
 }
@@ -154,51 +141,36 @@ void SampleDisplay::draw(ml::DrawContext dc)
   int w = bounds.width();
   int h = bounds.height();
   const int gridSize = dc.coords.gridSizeInPixels;
-  
+  int margin = gridSize/64.f;
+
   auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
   
-  if(!_pSample)
+  // paint background
   {
     nvgBeginPath(nvg);
     nvgRect(nvg, 0, 0, w, h);
     nvgFillColor(nvg, bgColor);
     nvgFill(nvg);
-    return;
   }
+  
+  if(!_pSample) return;
   if(!_backingLayer) return;
- 
-  
-  Rect pBounds = getPixelBounds(dc, *this);
-  int pw = pBounds.width();
-  int ph = pBounds.height();
-  
-  int bw = _backingLayer->width;
-  int bh = _backingLayer->height;
-  
-  int margin = gridSize/64.f;
-  
-  // blit backing layer to main layer
+
   auto nativeImage = getNativeImageHandle(*_backingLayer);
-  
-  // paint background color
-  nvgBeginPath(nvg);
-  nvgRect(nvg, 0, 0, w, h);
-  nvgFillColor(nvg, bgColor);
-  nvgFill(nvg);
-  
   
   // make an image pattern. The entire source image maps to the specified rect of the destination.
   NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
 
-  nvgSave(nvg);
-  nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
-  
-  // paint image lighten over bg
-  nvgBeginPath(nvg);
-  nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
-  nvgFillPaint(nvg, img);
-  nvgFill(nvg);
-  
-  nvgRestore(nvg);
- 
+  {
+    nvgSave(nvg);
+    nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
+    
+    // paint image lighten over bg
+    nvgBeginPath(nvg);
+    nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
+    nvgFillPaint(nvg, img);
+    nvgFill(nvg);
+    
+    nvgRestore(nvg);
+  }
 }

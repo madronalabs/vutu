@@ -45,7 +45,7 @@ UtuViewView::~UtuViewView ()
 
 #pragma mark from ml::AppView
 
-void UtuViewView::layoutView()
+void UtuViewView::layoutView(DrawContext dc)
 {
   Vec2 gridDims = getSizeInGridUnits();
   int gx = gridDims.x();
@@ -104,7 +104,7 @@ void UtuViewView::layoutView()
   forEach< Widget >
   (_view->_widgets, [&](Widget& w)
    {
-    w.setProperty("visible", true);
+    w.resize(dc);
   }
    );
 }
@@ -118,6 +118,7 @@ void UtuViewView::initializeResources(NativeDrawContext* nvg)
   _drawingProperties.setProperty("draw_widget_bounds", true);
   _drawingProperties.setProperty("draw_widget_outlines", true);
   _drawingProperties.setProperty("common_stroke_width", 1/24.f);
+  _drawingProperties.setProperty("partials", colorToMatrix({0.01, 1.00, 0.01, 1.0}));
 
   if (nvg)
   {

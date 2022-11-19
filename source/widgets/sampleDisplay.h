@@ -18,17 +18,13 @@ class SampleDisplay : public Widget
   void paintSample(ml::DrawContext dc);
 
   bool _initialized{ false };
-  bool _partialsDirty{ true };
+  bool _partialsDirty{ false };
 
-  
   std::unique_ptr< Layer > _backingLayer;
-  
   const utu::Sample * _pSample{nullptr};
-  
-
   ml::DrawContext _prevDC{nullptr};
-public:
   
+public:
   SampleDisplay(WithValues p) : Widget(p) {}
 
   // Widget implementation
@@ -36,7 +32,5 @@ public:
   MessageList animate(int elapsedTimeInMs, ml::DrawContext dc) override;
   void draw(ml::DrawContext d) override;
   void receiveNamedRawPointer(Path name, void* ptr) override;
-
-
 };
 

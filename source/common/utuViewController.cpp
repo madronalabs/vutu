@@ -142,12 +142,12 @@ void UtuViewController::_loadFileFromDialog()
       {
         pData[i] = pData[i*fileInfo.channels];
       }
-      _sample.data.resize(fileInfo.frames);
+      _sample.data.resize(framesRead);
     }
     
     // if we have good audio data, send to View and Processor
     Sample* pSample = &_sample;
-    Value samplePtrValue(&pSample, sizeof(void *));
+    Value samplePtrValue(&pSample, sizeof(Sample*));
     sendMessageToActor(_processorName, {"do/set_audio_data", samplePtrValue});
     sendMessageToActor(_viewName, {"do/set_audio_data", samplePtrValue});
   }
