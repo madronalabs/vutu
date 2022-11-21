@@ -47,5 +47,17 @@ public:
   void processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused) override;
 
   void onMessage(Message msg) override;
+  
+private:
+  
+  int testCounter{0};
+  void setPlaybackState(int);
 
+  Symbol playbackState{"off"};
+  size_t playbackSampleIdx{0};
+  //size_t playbackCounter{0};
+  
+  sumu::Sample* _pSourceSample; // points to Sample owned by Controller
+  sumu::Sample _playbackSample;
+  
 };

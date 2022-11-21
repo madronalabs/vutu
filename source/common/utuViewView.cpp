@@ -23,7 +23,7 @@
 
 #include "../build/resources/utu-view/resources.c"
 
-using namespace utu;
+using namespace sumu;
 
 ml::Rect smallDialRect{0, 0, 1.0, 1.0};
 ml::Rect mediumDialRect{0, 0, 1.5, 1.5};
@@ -296,6 +296,7 @@ void UtuViewView::onMessage(Message msg)
           break;
         }
           
+
         default:
         {
           // if the message is not from the controller,
@@ -324,6 +325,15 @@ void UtuViewView::onMessage(Message msg)
         {
           msg.address = tail(msg.address);
           sendMessageToActor(_controllerName, msg);
+          break;
+        }
+        case(hash("widget")):
+        {
+          
+          msg.address = tail(msg.address);
+          auto widgetName = head(msg.address);
+          msg.address = tail(msg.address);          
+          sendMessage(_view->_widgets[widgetName], msg);
           break;
         }
         default:

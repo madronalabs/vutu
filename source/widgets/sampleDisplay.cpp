@@ -49,7 +49,7 @@ void SampleDisplay::receiveNamedRawPointer(Path name, void* ptr)
   switch(hash(head(name)))
   {
     case(hash("sample")):
-      _pSample = static_cast< const utu::Sample* > (ptr);
+      _pSample = static_cast< const sumu::Sample* > (ptr);
       
       std::cout << "receiveNamedRawPointer: " << _pSample << "\n";
       

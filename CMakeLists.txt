@@ -207,117 +207,140 @@ else()
 endif()
 
 
- #--------------------------------------------------------------------
- # make juce-core library
- #--------------------------------------------------------------------
- 
- set(target juce-core)
- 
- add_library(${target} STATIC ${juce_core_sources})
- 
- target_include_directories(${target} PRIVATE ${juce_core_include_dirs})
- 
- # set juce-core configuration for this target
- target_compile_definitions(${target} PRIVATE JUCE_APP_CONFIG_HEADER="external/juce_core/JuceCoreConfig.h")
- target_compile_definitions(${target} PUBLIC "$<$<CONFIG:DEBUG>:DEBUG>")
- target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
- 
- if(APPLE)
-     # ARC must be off for juce
-     target_compile_options(${target} PRIVATE "-fno-objc-arc")
- 
-     # build only active arch for Debug builds
-     set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
- 
-     # set debug info format
-     set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
- endif()
- 
- #--------------------------------------------------------------------
- # gather nfd sources
- #--------------------------------------------------------------------
- 
- set(nfd_sources
-   ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/nfd.h
-   ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/nfd.hpp)
- 
- if(WIN32)
-     set(nfd_sources_native
-         ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_win.cpp
-     )
- elseif(APPLE)
-     set(nfd_sources_native
-         ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_cocoa.m
-     )
- elseif(UNIX AND NOT APPLE)
-     set(nfd_sources_native
-         ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_gtk.cpp
-     )
- endif()
- 
- list(APPEND nfd_sources ${nfd_sources_native} )
- 
- #--------------------------------------------------------------------
- # make nfd library
- #--------------------------------------------------------------------
- 
- set(target nfd)
- 
- # Define the library
- add_library(${target} STATIC ${nfd_sources})
- 
- # Allow includes from include/
- target_include_directories(${target} PUBLIC ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/)
- 
- # find and link libraries 
- if(WIN32)
- 
- elseif(APPLE)
-     find_library(APPKIT_LIBRARY AppKit)
-     target_link_libraries(${target} PRIVATE ${APPKIT_LIBRARY})
- elseif(UNIX AND NOT APPLE)
-     find_package(PkgConfig REQUIRED)
-     pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
-     message("Using GTK version: ${GTK3_VERSION}")
-     target_include_directories(${target} PRIVATE ${GTK3_INCLUDE_DIRS})
-     target_link_libraries(${target} PRIVATE ${GTK3_LIBRARIES})
- endif()
- 
- # compiler settings
- if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-   string(REPLACE "/EHsc" "/EHs-c-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-   string(REPLACE "/GR" "/GR-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-   set_property(TARGET ${target} APPEND_STRING PROPERTY STATIC_LIBRARY_OPTIONS /NODEFAULTLIB)
- endif()
- 
- if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-   target_compile_options(${target} PRIVATE -nostdlib -fno-exceptions -fno-rtti)
- endif()
- 
- if(APPLE)
-     # build only active arch for Debug builds
-     set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
- 
-     # set debug info format
-     set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
- endif()
- 
- #--------------------------------------------------------------------
- # libsndfile
- #--------------------------------------------------------------------
- 
- if(MSVC)
-   set(ENABLE_STATIC_RUNTIME OFF CACHE INTERNAL "")
- endif()
- set(ENABLE_EXTERNAL_LIBS OFF CACHE INTERNAL "")
- set(ENABLE_CPACK OFF CACHE INTERNAL "")
- set(ENABLE_PACKAGE_CONFIG OFF CACHE INTERNAL "")
- set(BUILD_TESTING OFF CACHE INTERNAL "")
- set(BUILD_PROGRAMS OFF CACHE INTERNAL "")
- set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
- add_subdirectory(source/external/libsndfile)
- 
- 
+#--------------------------------------------------------------------
+# make juce-core library
+#--------------------------------------------------------------------
+
+set(target juce-core)
+
+add_library(${target} STATIC ${juce_core_sources})
+
+target_include_directories(${target} PRIVATE ${juce_core_include_dirs})
+
+# set juce-core configuration for this target
+target_compile_definitions(${target} PRIVATE JUCE_APP_CONFIG_HEADER="external/juce_core/JuceCoreConfig.h")
+target_compile_definitions(${target} PUBLIC "$<$<CONFIG:DEBUG>:DEBUG>")
+target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
+
+if(APPLE)
+   # ARC must be off for juce
+   target_compile_options(${target} PRIVATE "-fno-objc-arc")
+
+   # build only active arch for Debug builds
+   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
+
+   # set debug info format
+   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
+endif()
+
+#--------------------------------------------------------------------
+# gather nfd sources
+#--------------------------------------------------------------------
+
+set(nfd_sources
+ ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/nfd.h
+ ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/nfd.hpp)
+
+if(WIN32)
+   set(nfd_sources_native
+       ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_win.cpp
+   )
+elseif(APPLE)
+   set(nfd_sources_native
+       ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_cocoa.m
+   )
+elseif(UNIX AND NOT APPLE)
+   set(nfd_sources_native
+       ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_gtk.cpp
+   )
+endif()
+
+list(APPEND nfd_sources ${nfd_sources_native} )
+
+#--------------------------------------------------------------------
+# make nfd library
+#--------------------------------------------------------------------
+
+set(target nfd)
+
+# Define the library
+add_library(${target} STATIC ${nfd_sources})
+
+# Allow includes from include/
+target_include_directories(${target} PUBLIC ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/)
+
+# find and link libraries 
+if(WIN32)
+
+elseif(APPLE)
+   find_library(APPKIT_LIBRARY AppKit)
+   target_link_libraries(${target} PRIVATE ${APPKIT_LIBRARY})
+elseif(UNIX AND NOT APPLE)
+   find_package(PkgConfig REQUIRED)
+   pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
+   message("Using GTK version: ${GTK3_VERSION}")
+   target_include_directories(${target} PRIVATE ${GTK3_INCLUDE_DIRS})
+   target_link_libraries(${target} PRIVATE ${GTK3_LIBRARIES})
+endif()
+
+# compiler settings
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+ string(REPLACE "/EHsc" "/EHs-c-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+ string(REPLACE "/GR" "/GR-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+ set_property(TARGET ${target} APPEND_STRING PROPERTY STATIC_LIBRARY_OPTIONS /NODEFAULTLIB)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+ target_compile_options(${target} PRIVATE -nostdlib -fno-exceptions -fno-rtti)
+endif()
+
+if(APPLE)
+   # build only active arch for Debug builds
+   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
+
+   # set debug info format
+   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
+endif()
+
+#--------------------------------------------------------------------
+# libsndfile
+#--------------------------------------------------------------------
+
+if(MSVC)
+ set(ENABLE_STATIC_RUNTIME OFF CACHE INTERNAL "")
+endif()
+set(ENABLE_EXTERNAL_LIBS OFF CACHE INTERNAL "")
+set(ENABLE_CPACK OFF CACHE INTERNAL "")
+set(ENABLE_PACKAGE_CONFIG OFF CACHE INTERNAL "")
+set(BUILD_TESTING OFF CACHE INTERNAL "")
+set(BUILD_PROGRAMS OFF CACHE INTERNAL "")
+set(BUILD_EXAMPLES OFF CACHE INTERNAL "")
+add_subdirectory(source/external/libsndfile)
+
+
+#--------------------------------------------------------------------
+# gather libresample sources
+#--------------------------------------------------------------------
+
+file(GLOB LIBRESAMPLE_SOURCES "${CMAKE_SOURCE_DIR}/source/external/libresample/src/*.c")
+file(GLOB LIBRESAMPLE_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/libresample/src/*.h")
+    
+set(LIBRESAMPLE_PUBLIC_INCLUDES
+    "${CMAKE_SOURCE_DIR}/external/libresample/include/libresample.h"
+)
+
+
+#--------------------------------------------------------------------
+# make libresample
+#--------------------------------------------------------------------
+
+set(target libresample)
+
+# Define the library
+add_library(${target} STATIC ${LIBRESAMPLE_SOURCES})
+
+target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
+
 #--------------------------------------------------------------------
 # set source groups for some source above
 #--------------------------------------------------------------------
@@ -357,6 +380,7 @@ target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/common" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/sumu" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/utu" )
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/libresample/include" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
 
 # add SDL2
@@ -389,7 +413,7 @@ elseif(WIN32)
 endif()
 
 # add other external libraries
-target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile)
+target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile libresample)
 
 if(APPLE)
     # ARC must be off for juce

@@ -27,12 +27,8 @@
 
 #include <loris.h>
 
-
-//#include "AudioFile.h"
-
-
 using namespace ml;
-using namespace utu;
+using namespace sumu;
 
 
 //-----------------------------------------------------------------------------
@@ -109,8 +105,6 @@ void UtuViewController::_loadFileFromDialog()
     size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
 
     size_t framesToRead = std::min(fileSizeInFrames, kMaxFrames);
-
-    size_t kMaxSamples = kMaxFrames*fileInfo.channels;
     size_t samplesToRead = framesToRead*fileInfo.channels;
     
     _printToConsole(TextFragment("loading ", pathToText(filePath), "..."));
@@ -146,14 +140,12 @@ void UtuViewController::_loadFileFromDialog()
     }
     
     // if we have good audio data, send to View and Processor
-    Sample* pSample = &_sample;
-    Value samplePtrValue(&pSample, sizeof(Sample*));
+    sumu::Sample* pSample = &_sample;
+    Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
     sendMessageToActor(_processorName, {"do/set_audio_data", samplePtrValue});
     sendMessageToActor(_viewName, {"do/set_audio_data", samplePtrValue});
   }
 }
-
-
 
 void UtuViewController::analyze()
 {
@@ -164,6 +156,38 @@ void UtuViewController::analyze()
   
   analyzer_configure(res, width);
   
+}
+
+
+void UtuViewController::handlePlayButton()
+{
+  switch(hash(playMode))
+  {
+    case(hash("off")):
+    {
+      playMode = "on";
+      
+      // ping processor
+      sendMessageToActor(_processorName, {"do/play"});
+      
+      // switch play button text
+      sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("stop")});
+            
+      break;
+    }
+    case(hash("on")):
+    {
+      playMode = "off";
+      
+      // ping processor
+      sendMessageToActor(_processorName, {"do/stop"});
+      
+      // switch play button text
+      sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("play")});
+
+      break;
+    }
+  }
 }
 
 
@@ -206,6 +230,12 @@ void UtuViewController::onMessage(Message m)
           _loadFileFromDialog();
           
           
+          messageHandled = true;
+          break;
+        }
+        case(hash("play")):
+        {
+          handlePlayButton();
           messageHandled = true;
           break;
         }

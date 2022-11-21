@@ -21,7 +21,7 @@ class SampleDisplay : public Widget
   bool _partialsDirty{ false };
 
   std::unique_ptr< Layer > _backingLayer;
-  const utu::Sample * _pSample{nullptr};
+  const sumu::Sample * _pSample{nullptr};
   ml::DrawContext _prevDC{nullptr};
   
 public:

@@ -5,7 +5,7 @@
 
 #pragma once
 
-namespace utu
+namespace sumu
 {
 
 struct Sample

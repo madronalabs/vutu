@@ -11,8 +11,10 @@
 #include <math.h>
 #include <iostream>
 
+#include "libresample.h"
+
 using namespace ml;
-using namespace utu;
+using namespace sumu;
 
 constexpr float kSizeLo = 0, kSizeHi = 40;
 constexpr float kToneLo = 250, kToneHi = 4000;
@@ -56,9 +58,59 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "plaindefault", -15 },
     { "units", "dB" }
   } ) );
+}
+
+
+void resample(const Sample* pSrc, Sample* pDest)
+{
+  int srcLen = pSrc->data.size();
+  double factor = double(pDest->sampleRate) / double(pSrc->sampleRate);
+    
+  int expectedLen = (int)(srcLen * factor);
+  int dstLen = expectedLen;
+  pDest->data.resize(expectedLen);
+
+  constexpr int srcBlockSize{1024};
+  constexpr int destBlockSize{1024};
+  int srcSamplesUsed{0};
+  int resampled{0};
+
+  void *resamplerHandle = resample_open(1, factor, factor);
+  int fwidth = resample_get_filter_width(resamplerHandle);
+  int destIdx = 0;
+  int srcIdx = 0;
+  for(;;) {
+    int srcBlock = std::min(srcLen-srcIdx, srcBlockSize);
+    int lastFlag = (srcBlock == srcLen-srcIdx);
+    
+    resampled = resample_process(resamplerHandle, factor,
+                         &pSrc->data[srcIdx], srcBlock,
+                         lastFlag, &srcSamplesUsed,
+                         &pDest->data[destIdx], std::min(dstLen-destIdx, destBlockSize));
+    srcIdx += srcSamplesUsed;
+    if (resampled >= 0)
+      destIdx += resampled;
+    if (resampled < 0 || (resampled == 0 && srcIdx == srcLen))
+      break;
+  }
+  resample_close(resamplerHandle);
   
-
-
+  if (resampled < 0) {
+    printf("Error: resample_process returned an error: %d\n", resampled);
+  }
+  
+  if (destIdx <= 0) {
+    printf("Error: resample_process returned %d samples\n", destIdx);
+    return;
+  }
+  
+  int lendiff = abs(destIdx - expectedLen);
+  if (lendiff > (int)(2*factor + 1.0)) {
+    std::cout << "   Expected " << expectedLen << " samples, got " << destIdx << " out\n";
+  }
+  
+  std::cout << "resampled: " << pSrc->data.size() << " -> " << pDest->data.size() << "\n";
+  
 }
 
 
@@ -66,20 +118,60 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 // with the nullptr constructor argument above, RtAudioProcessor
 void UtuViewProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused)
 {
+  // TEST
+  int sr = _processData.sampleRate;
+  testCounter += kFloatsPerDSPVector;
+  bool test{false};
+  if(testCounter >= sr)
+  {
+    test = true;
+    testCounter -= sr;
+  }
+  if(test)
+  {
+    std::cout << "playbackState: " << playbackState << "\n";
+    std::cout << "playbackSampleIdx: " << playbackSampleIdx << "\n";
+    }
+  
+  
   // get params from the SignalProcessor.
-  float f1 = 220.0;//getParam("freq1");
-  float f2 = 330.0;//getParam("freq2");
   float gain = getParam("master_volume");
   float amp = dBToAmp(gain);
     
  // std::cout << "gain: " << gain << "\n";
+  DSPVector sampleVec;
+  
+  if(playbackState == "on")
+  {
+    load(sampleVec, &(_playbackSample.data[playbackSampleIdx]));
+    playbackSampleIdx += kFloatsPerDSPVector;
+  }
+  
+  if(playbackSampleIdx >= _playbackSample.data.size())
+  {
+    playbackState = "off";
+  }
   
   // Running the sine generators makes DSPVectors as output.
   // The input parameter is omega: the frequency in Hz divided by the sample rate.
   // The output sines are multiplied by the gain.
-  outputs[0] = s1(f1/kSampleRate)*amp;
-  outputs[1] = s2(f2/kSampleRate)*amp;
+  outputs[0] = outputs[1] = sampleVec*amp;
 }
+
+void UtuViewProcessor::setPlaybackState(int newState)
+{
+  if(newState)
+  {
+    playbackState = "on";
+    playbackSampleIdx = 0;
+  }
+  else
+  {
+    playbackState = "off";
+    playbackSampleIdx = 0;
+  }
+}
+
 
 void UtuViewProcessor::onMessage(Message msg)
 {
@@ -102,9 +194,29 @@ void UtuViewProcessor::onMessage(Message msg)
       {
         case(hash("set_audio_data")):
         {
+          setPlaybackState(0);
+          
           // get pointer from message
-          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
- 
+          _pSourceSample = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
+          
+          int currentSampleRate = _processData.sampleRate;
+          std::cout << "UtuViewProcessor: sr = " << currentSampleRate << "\n";
+          std::cout << "    sample input: sr = " << _pSourceSample->sampleRate << "\n";
+
+          // resample to current system sample rate for playback
+          _playbackSample.sampleRate = currentSampleRate;
+          resample(_pSourceSample, &_playbackSample);
+          break;
+        }
+        case(hash("play")):
+        {
+          setPlaybackState(1);
+          break;
+        }
+        case(hash("stop")):
+        {
+          setPlaybackState(0);
+          break;
         }
       }
       break;

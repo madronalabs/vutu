@@ -41,8 +41,10 @@ public:
   
 private:
   
-  utu::Sample _sample;
+  sumu::Sample _sample;
 
+  
+  void handlePlayButton();
   void _loadFileFromDialog();
   
   // the state to which we can revert, stored as normalized values.
@@ -54,5 +56,7 @@ private:
   Timer _debugTimer;
   void _debug();
   void _printToConsole(TextFragment t);
+  
+  Symbol playMode{ "off" };
 
 };
