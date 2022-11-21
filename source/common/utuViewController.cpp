@@ -161,33 +161,8 @@ void UtuViewController::analyze()
 
 void UtuViewController::handlePlayButton()
 {
-  switch(hash(playMode))
-  {
-    case(hash("off")):
-    {
-      playMode = "on";
-      
-      // ping processor
-      sendMessageToActor(_processorName, {"do/play"});
-      
-      // switch play button text
-      sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("stop")});
-            
-      break;
-    }
-    case(hash("on")):
-    {
-      playMode = "off";
-      
-      // ping processor
-      sendMessageToActor(_processorName, {"do/stop"});
-      
-      // switch play button text
-      sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("play")});
+    sendMessageToActor(_processorName, {"do/play"});
 
-      break;
-    }
-  }
 }
 
 
@@ -235,8 +210,20 @@ void UtuViewController::onMessage(Message m)
         }
         case(hash("play")):
         {
-          handlePlayButton();
+          sendMessageToActor(_processorName, {"do/toggle_play"});
           messageHandled = true;
+          break;
+        }
+        case(hash("playback_started")):
+        {
+          // switch play button text
+          sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("stop")});
+          break;
+        }
+        case(hash("playback_stopped")):
+        {
+          // switch play button text
+          sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("play")});
           break;
         }
         default:

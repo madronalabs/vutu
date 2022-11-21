@@ -35,13 +35,9 @@ public RtAudioProcessor
   SineGen s1, s2;
   
 public:
-  UtuViewProcessor(size_t nInputs, size_t nOutputs, int sampleRate, const ParameterDescriptionList& pdl) :
-  RtAudioProcessor(nInputs, nOutputs, sampleRate)
-  {
-    buildParameterTree(pdl, _params);
-    setDefaults(_params);
-  }
-  
+  UtuViewProcessor(TextFragment appName, size_t instanceNum,
+                   size_t nInputs, size_t nOutputs,
+                   int sampleRate, const ParameterDescriptionList& pdl);
   ~UtuViewProcessor() = default;
   
   void processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused) override;
@@ -50,8 +46,11 @@ public:
   
 private:
   
+  Path _controllerName;
+  
   int testCounter{0};
-  void setPlaybackState(int);
+  void setPlaybackState(int playing);
+  void togglePlaybackState();
 
   Symbol playbackState{"off"};
   size_t playbackSampleIdx{0};

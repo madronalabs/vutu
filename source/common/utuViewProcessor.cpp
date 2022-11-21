@@ -113,6 +113,22 @@ void resample(const Sample* pSrc, Sample* pDest)
   
 }
 
+UtuViewProcessor::UtuViewProcessor(TextFragment appName, size_t instanceNum,
+                 size_t nInputs, size_t nOutputs,
+                 int sampleRate, const ParameterDescriptionList& pdl) :
+RtAudioProcessor(nInputs, nOutputs, sampleRate)
+{
+  // get names of other Actors we might communicate with
+  _controllerName = TextFragment(appName, "controller", ml::textUtils::naturalNumberToText(instanceNum));
+  
+  // register ourself
+  auto myName = TextFragment(appName, "processor", ml::textUtils::naturalNumberToText(instanceNum));
+  registerActor(myName, this);
+  
+  
+  buildParameterTree(pdl, _params);
+  setDefaults(_params);
+}
 
 // declare the processVector function that will run our DSP in vectors of size kFloatsPerDSPVector
 // with the nullptr constructor argument above, RtAudioProcessor
@@ -131,8 +147,7 @@ void UtuViewProcessor::processVector(MainInputs inputs, MainOutputs outputs, voi
   {
     std::cout << "playbackState: " << playbackState << "\n";
     std::cout << "playbackSampleIdx: " << playbackSampleIdx << "\n";
-    }
-  
+  }
   
   // get params from the SignalProcessor.
   float gain = getParam("master_volume");
@@ -143,14 +158,19 @@ void UtuViewProcessor::processVector(MainInputs inputs, MainOutputs outputs, voi
   
   if(playbackState == "on")
   {
-    load(sampleVec, &(_playbackSample.data[playbackSampleIdx]));
-    playbackSampleIdx += kFloatsPerDSPVector;
+    if(_playbackSample.data.size() > 0)
+    {
+      load(sampleVec, &(_playbackSample.data[playbackSampleIdx]));
+      playbackSampleIdx += kFloatsPerDSPVector;
+    }
+    
+    if(playbackSampleIdx >= _playbackSample.data.size())
+    {
+      playbackState = "off";
+      sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
+    }
   }
   
-  if(playbackSampleIdx >= _playbackSample.data.size())
-  {
-    playbackState = "off";
-  }
   
   // Running the sine generators makes DSPVectors as output.
   // The input parameter is omega: the frequency in Hz divided by the sample rate.
@@ -158,9 +178,9 @@ void UtuViewProcessor::processVector(MainInputs inputs, MainOutputs outputs, voi
   outputs[0] = outputs[1] = sampleVec*amp;
 }
 
-void UtuViewProcessor::setPlaybackState(int newState)
+void UtuViewProcessor::setPlaybackState(int playing)
 {
-  if(newState)
+  if(playing)
   {
     playbackState = "on";
     playbackSampleIdx = 0;
@@ -168,7 +188,25 @@ void UtuViewProcessor::setPlaybackState(int newState)
   else
   {
     playbackState = "off";
-    playbackSampleIdx = 0;
+  }
+}
+
+
+// toggle current playback state and tell controller
+void UtuViewProcessor::togglePlaybackState()
+{
+  if(playbackState == "off")
+  {
+    if(_playbackSample.data.size() > 0)
+    {
+      setPlaybackState(1);
+      sendMessageToActor(_controllerName, Message{"do/playback_started"});
+    }
+  }
+  else
+  {
+    setPlaybackState(0);
+    sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
   }
 }
 
@@ -208,14 +246,9 @@ void UtuViewProcessor::onMessage(Message msg)
           resample(_pSourceSample, &_playbackSample);
           break;
         }
-        case(hash("play")):
+        case(hash("toggle_play")):
         {
-          setPlaybackState(1);
-          break;
-        }
-        case(hash("stop")):
-        {
-          setPlaybackState(0);
+          togglePlaybackState();
           break;
         }
       }

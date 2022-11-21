@@ -72,7 +72,6 @@ int main(int argc, char *argv[])
   
   // make controller and get instance number
   UtuViewController appController(getAppName(), pdl);
-  //AppController appController(getAppName(), pdl);
   auto instanceNum = appController.getInstanceNum();
   
   // make view
@@ -93,11 +92,9 @@ int main(int argc, char *argv[])
     ResizingEventWatcherData watcherData{window, &appView};
     SDL_AddEventWatch( resizingEventWatcher, &watcherData );
     
-    // make Processor and register Actor
-    UtuViewProcessor appProcessor(kInputChannels, kOutputChannels, kSampleRate, pdl);
-    TextFragment processorName(getAppName(), "processor", ml::textUtils::naturalNumberToText(instanceNum));
-    registerActor(Path(processorName), &appProcessor);
-    
+    // make Processor
+    UtuViewProcessor appProcessor(getAppName(), instanceNum, kInputChannels, kOutputChannels, kSampleRate, pdl);
+
     // attach app view to window and resize
     ParentWindowInfo windowInfo = getParentWindowInfo(window);
     appView.createPlatformView(windowInfo.windowPtr, windowInfo.flags);
