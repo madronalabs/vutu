@@ -61,8 +61,28 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 }
 
 
-void resample(const Sample* pSrc, Sample* pDest)
+void normalize(Sample* pSrc)
 {
+  if(!pSrc) return;
+  
+  // get max
+  float xMax{0.f};
+  for(int i=0; i<pSrc->data.size(); ++i)
+  {
+    float x = pSrc->data[i];
+    xMax = std::max(xMax, x);
+  }
+  
+  // multiply
+  float ratio = 1.0f / xMax;
+  for(int i=0; i<pSrc->data.size(); ++i)
+  {
+    pSrc->data[i] *= ratio;
+  }
+}
+
+void resample(const Sample* pSrc, Sample* pDest)
+  {
   int srcLen = pSrc->data.size();
   double factor = double(pDest->sampleRate) / double(pSrc->sampleRate);
     
@@ -167,28 +187,20 @@ void UtuViewProcessor::processVector(MainInputs inputs, MainOutputs outputs, voi
     if(playbackSampleIdx >= _playbackSample.data.size())
     {
       playbackState = "off";
+      playbackSampleIdx = 0;
       sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
     }
+    
+    float progress = float(playbackSampleIdx) / float(_playbackSample.data.size());
+    sendMessageToActor(_controllerName, Message{"set_prop/playback_progress", progress});
   }
+  
   
   
   // Running the sine generators makes DSPVectors as output.
   // The input parameter is omega: the frequency in Hz divided by the sample rate.
   // The output sines are multiplied by the gain.
   outputs[0] = outputs[1] = sampleVec*amp;
-}
-
-void UtuViewProcessor::setPlaybackState(int playing)
-{
-  if(playing)
-  {
-    playbackState = "on";
-    playbackSampleIdx = 0;
-  }
-  else
-  {
-    playbackState = "off";
-  }
 }
 
 
@@ -199,14 +211,17 @@ void UtuViewProcessor::togglePlaybackState()
   {
     if(_playbackSample.data.size() > 0)
     {
-      setPlaybackState(1);
+      playbackState = "on";
+      playbackSampleIdx = 0;
       sendMessageToActor(_controllerName, Message{"do/playback_started"});
     }
   }
   else
   {
-    setPlaybackState(0);
+    playbackState = "off";
+    playbackSampleIdx = 0;
     sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
+    sendMessageToActor(_controllerName, Message{"set_prop/playback_progress", 0});
   }
 }
 
@@ -232,7 +247,8 @@ void UtuViewProcessor::onMessage(Message msg)
       {
         case(hash("set_audio_data")):
         {
-          setPlaybackState(0);
+          playbackState = "off";
+          sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
           _pSourceSample = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
@@ -243,9 +259,20 @@ void UtuViewProcessor::onMessage(Message msg)
 
           // resample to current system sample rate for playback
           _playbackSample.sampleRate = currentSampleRate;
+          normalize(_pSourceSample);
           resample(_pSourceSample, &_playbackSample);
           break;
         }
+    
+        case(hash("stop_play")):
+        {
+          if(playbackState != "off")
+          {
+            togglePlaybackState();
+          }
+          break;
+        }
+          
         case(hash("toggle_play")):
         {
           togglePlaybackState();

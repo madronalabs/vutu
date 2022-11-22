@@ -43,9 +43,8 @@ private:
   
   sumu::Sample _sample;
 
-  
-  void handlePlayButton();
-  void _loadFileFromDialog();
+
+  int _loadFileFromDialog();
   
   // the state to which we can revert, stored as normalized values.
   Tree< Value > _revertState;

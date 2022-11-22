@@ -40,6 +40,14 @@ MessageList SampleDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc)
     _dirty = true;
   }
   
+  float p = getFloatPropertyWithDefault("progress", 0);
+  //std::cout << "progress: " << progress << "\n";
+  if(p != _progress)
+  {
+    _progress = p;
+    _dirty = true;
+  }
+  
   return MessageList{};
 }
 
@@ -70,6 +78,7 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
 {
   NativeDrawContext* nvg = getNativeContext(dc);
   const int gridSize = dc.coords.gridSizeInPixels;
+
 
   if(!_backingLayer) return;
 
@@ -112,6 +121,7 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
   size_t totalFramesDrawn{0};
 
   nvgStrokeColor(nvg, color);
+  nvgStrokeWidth(nvg, 1.0f);
   nvgBeginPath(nvg);
 
   // TEMP no smoothing
@@ -142,9 +152,11 @@ void SampleDisplay::draw(ml::DrawContext dc)
   int h = bounds.height();
   const int gridSize = dc.coords.gridSizeInPixels;
   int margin = gridSize/64.f;
-
-  auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
+  float strokeWidth = gridSize/32.f;
   
+  auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
+  auto markColor = getColor(dc, "partials");
+
   // paint background
   {
     nvgBeginPath(nvg);
@@ -172,5 +184,20 @@ void SampleDisplay::draw(ml::DrawContext dc)
     nvgFill(nvg);
     
     nvgRestore(nvg);
+  }
+  
+  // draw progress
+  {
+    Interval xRange{0.f, w - 1.f};
+    auto xToProgress = projections::linear({0.f, 1.f}, xRange);
+
+    float px = xToProgress(_progress);
+    nvgStrokeWidth(nvg, strokeWidth);
+    nvgBeginPath(nvg);
+    nvgStrokeColor(nvg, markColor);
+    nvgMoveTo(nvg, px, 0);
+    nvgLineTo(nvg, px, h);
+    nvgStroke(nvg);
+    
   }
 }

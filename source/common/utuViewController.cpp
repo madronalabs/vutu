@@ -59,8 +59,9 @@ void UtuViewController::_printToConsole(TextFragment t)
   sendMessageToActor(_viewName, {"info/set_prop/text", t});
 }
 
-void UtuViewController::_loadFileFromDialog()
+int UtuViewController::_loadFileFromDialog()
 {
+  int OK{ false };
   nfdchar_t *outPath;
   std::string sourcePath;
   nfdfilteritem_t filterItem[2] = { { "WAV audio", "wav" }, { "AIFF audio", "aiff,aif,aifc" } };
@@ -124,6 +125,7 @@ void UtuViewController::_loadFileFromDialog()
     {
       TextFragment truncatedMsg = (framesToRead == kMaxFrames) ? "(truncated)" : "";
       readStatus = (TextFragment(textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg ));
+      OK = true;
     }
     
     _printToConsole(readStatus);
@@ -138,13 +140,9 @@ void UtuViewController::_loadFileFromDialog()
       }
       _sample.data.resize(framesRead);
     }
-    
-    // if we have good audio data, send to View and Processor
-    sumu::Sample* pSample = &_sample;
-    Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
-    sendMessageToActor(_processorName, {"do/set_audio_data", samplePtrValue});
-    sendMessageToActor(_viewName, {"do/set_audio_data", samplePtrValue});
+
   }
+  return OK;
 }
 
 void UtuViewController::analyze()
@@ -156,13 +154,6 @@ void UtuViewController::analyze()
   
   analyzer_configure(res, width);
   
-}
-
-
-void UtuViewController::handlePlayButton()
-{
-    sendMessageToActor(_processorName, {"do/play"});
-
 }
 
 
@@ -191,6 +182,11 @@ void UtuViewController::onMessage(Message m)
       Path whatProp = tail(addr);
       switch(hash(head(whatProp)))
       {
+        case(hash("playback_progress")):
+        {
+          sendMessageToActor(_viewName, {"widget/sample/set_prop/progress", m.value});
+          break;
+        }
       }
       break;
     }
@@ -201,14 +197,26 @@ void UtuViewController::onMessage(Message m)
       {
         case(hash("open")):
         {
-          std::cout << "let's open a file!\n";
-          _loadFileFromDialog();
-          
-          
+          if(_loadFileFromDialog())
+          {
+            
+            // if we have good audio data, send to View and Processor
+            sumu::Sample* pSample = &_sample;
+            Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
+            sendMessageToActor(_processorName, {"do/set_audio_data", samplePtrValue});
+            sendMessageToActor(_viewName, {"do/set_audio_data", samplePtrValue});
+            
+            sendMessageToActor(_viewName, {"widget/play/set_prop/enabled", true});
+            //sendMessageToActor(_processorName, {"do/stop_play"});
+          }
+          else
+          {
+            sendMessageToActor(_viewName, {"widget/play/set_prop/enabled", false});
+          }
           messageHandled = true;
           break;
         }
-        case(hash("play")):
+        case(hash("toggle_play")):
         {
           sendMessageToActor(_processorName, {"do/toggle_play"});
           messageHandled = true;
@@ -218,12 +226,15 @@ void UtuViewController::onMessage(Message m)
         {
           // switch play button text
           sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("stop")});
+          messageHandled = true;
           break;
         }
         case(hash("playback_stopped")):
         {
           // switch play button text
           sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("play")});
+          sendMessageToActor(_viewName, {"widget/sample/set_prop/progress", 0.f});
+          messageHandled = true;
           break;
         }
         default:

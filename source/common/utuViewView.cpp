@@ -193,7 +193,7 @@ void UtuViewView::makeWidgets(const ParameterDescriptionList& pdl)
   } );
   _view->_widgets.add_unique< TextButtonBasic >("play", WithValues{
     {"text", "play" },
-    {"action", "play" }
+    {"action", "toggle_play" }
   } );
   _view->_widgets.add_unique< TextButtonBasic >("synthesize", WithValues{
     {"text", "synthesize" },
@@ -229,6 +229,9 @@ void UtuViewView::makeWidgets(const ParameterDescriptionList& pdl)
     w.setProperty("visible", true);
   }
    );
+  
+  // play button disabled until we have a sample
+  _view->_widgets["play"]->setProperty("enabled", false);
   
   _setupWidgets(pdl);
 }

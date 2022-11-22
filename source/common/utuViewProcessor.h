@@ -49,7 +49,7 @@ private:
   Path _controllerName;
   
   int testCounter{0};
-  void setPlaybackState(int playing);
+
   void togglePlaybackState();
 
   Symbol playbackState{"off"};
