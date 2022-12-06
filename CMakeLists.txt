@@ -1,4 +1,4 @@
-# root CMakeLists.txt for utu-view.
+# root CMakeLists.txt for vutu.
 # to build:
 #
 # Mac OS:
@@ -20,7 +20,7 @@ IF(APPLE)
  # SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
 ENDIF(APPLE)
 
-project(utu-view)
+project(vutu)
 
 #--------------------------------------------------------------------
 # Compiler flags
@@ -353,9 +353,9 @@ source_group(nanosvg REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/external/nanosvg/src
 # make mlvg / SDL2 application target 
 #--------------------------------------------------------------------
 
-set(target utu-view)
+set(target vutu)
 
-create_resources (source/resources build/resources/utu-view)
+create_resources (source/resources build/resources/vutu)
  
 file(GLOB COMMON_SOURCES "${CMAKE_SOURCE_DIR}/source/common/*.cpp")
 file(GLOB COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/source/common/*.h")
