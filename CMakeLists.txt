@@ -145,42 +145,42 @@ create_resources (resource build/resources)
 #--------------------------------------------------------------------
 # gather nanovg and nanosvg sources
 #--------------------------------------------------------------------
-
-if(APPLE)
-  set(NANOVG_SOURCES
-      ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.c
-      ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.h
-      ${MLVG_SOURCE_DIR}/external/nanosvg/src/nanosvg.h
-      ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src/nanovg_mtl.h
-      ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src/nanovg_mtl.m
-  )
-  set(NANOVG_INCLUDE_DIRS
-      ${MLVG_SOURCE_DIR}/external/nanovg/src
-      ${MLVG_SOURCE_DIR}/external/nanosvg/src
-      ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src
-  )
-elseif(WIN32)
-  set(NANOVG_SOURCES
-      ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.c
-      ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.h
-      ${MLVG_SOURCE_DIR}/external/nanosvg/src/nanosvg.h
-      ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg_gl.h
-      ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg_gl_utils.h
-      ${MLVG_SOURCE_DIR}/external/glad/src/glad.c
-      ${MLVG_SOURCE_DIR}/external/glad/include/glad/glad.h
-      ${MLVG_SOURCE_DIR}/external/glad/include/KHR/khrplatform.h
-  )
-  set(NANOVG_INCLUDE_DIRS
-      ${MLVG_SOURCE_DIR}/external/nanovg/src
-      ${MLVG_SOURCE_DIR}/external/nanosvg/src
-      ${MLVG_SOURCE_DIR}/external/glad/include
-      ${MLVG_SOURCE_DIR}/external/glad/include/glad
-  )
-  if (MSVC)
-      set_source_files_properties(source/external/glad/src/glad.c
-      PROPERTIES COMPILE_FLAGS /wd4055)
-  endif()
-endif()
+# 
+# if(APPLE)
+#   set(NANOVG_SOURCES
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.c
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.h
+#       ${MLVG_SOURCE_DIR}/external/nanosvg/src/nanosvg.h
+#       ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src/nanovg_mtl.h
+#       ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src/nanovg_mtl.m
+#   )
+#   set(NANOVG_INCLUDE_DIRS
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src
+#       ${MLVG_SOURCE_DIR}/external/nanosvg/src
+#       ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src
+#   )
+# elseif(WIN32)
+#   set(NANOVG_SOURCES
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.c
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.h
+#       ${MLVG_SOURCE_DIR}/external/nanosvg/src/nanosvg.h
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg_gl.h
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg_gl_utils.h
+#       ${MLVG_SOURCE_DIR}/external/glad/src/glad.c
+#       ${MLVG_SOURCE_DIR}/external/glad/include/glad/glad.h
+#       ${MLVG_SOURCE_DIR}/external/glad/include/KHR/khrplatform.h
+#   )
+#   set(NANOVG_INCLUDE_DIRS
+#       ${MLVG_SOURCE_DIR}/external/nanovg/src
+#       ${MLVG_SOURCE_DIR}/external/nanosvg/src
+#       ${MLVG_SOURCE_DIR}/external/glad/include
+#       ${MLVG_SOURCE_DIR}/external/glad/include/glad
+#   )
+#   if (MSVC)
+#       set_source_files_properties(source/external/glad/src/glad.c
+#       PROPERTIES COMPILE_FLAGS /wd4055)
+#   endif()
+# endif()
 
 #--------------------------------------------------------------------
 # gather juce-core sources
@@ -428,7 +428,10 @@ endif()
  
 # set compiler options
 if(APPLE)
+    # missing return value should be an error
     target_compile_options(${target} PRIVATE "-Werror=return-type")
+    # suppress block comments warnings
+    target_compile_options(${target} PRIVATE "-Wno-comment")
 elseif(WIN32)
     target_compile_options(${target} PRIVATE "/wd4068") # silence unknown pragma warning
     target_compile_options(${target} PRIVATE "/EHa") # standard C++ stack unwinding
