@@ -142,168 +142,9 @@ endfunction()
 
 create_resources (resource build/resources)
 
-#--------------------------------------------------------------------
-# gather nanovg and nanosvg sources
-#--------------------------------------------------------------------
-# 
-# if(APPLE)
-#   set(NANOVG_SOURCES
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.c
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.h
-#       ${MLVG_SOURCE_DIR}/external/nanosvg/src/nanosvg.h
-#       ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src/nanovg_mtl.h
-#       ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src/nanovg_mtl.m
-#   )
-#   set(NANOVG_INCLUDE_DIRS
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src
-#       ${MLVG_SOURCE_DIR}/external/nanosvg/src
-#       ${MLVG_SOURCE_DIR}/external/MetalNanoVG/src
-#   )
-# elseif(WIN32)
-#   set(NANOVG_SOURCES
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.c
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg.h
-#       ${MLVG_SOURCE_DIR}/external/nanosvg/src/nanosvg.h
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg_gl.h
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src/nanovg_gl_utils.h
-#       ${MLVG_SOURCE_DIR}/external/glad/src/glad.c
-#       ${MLVG_SOURCE_DIR}/external/glad/include/glad/glad.h
-#       ${MLVG_SOURCE_DIR}/external/glad/include/KHR/khrplatform.h
-#   )
-#   set(NANOVG_INCLUDE_DIRS
-#       ${MLVG_SOURCE_DIR}/external/nanovg/src
-#       ${MLVG_SOURCE_DIR}/external/nanosvg/src
-#       ${MLVG_SOURCE_DIR}/external/glad/include
-#       ${MLVG_SOURCE_DIR}/external/glad/include/glad
-#   )
-#   if (MSVC)
-#       set_source_files_properties(source/external/glad/src/glad.c
-#       PROPERTIES COMPILE_FLAGS /wd4055)
-#   endif()
-# endif()
 
 #--------------------------------------------------------------------
-# gather juce-core sources
-#--------------------------------------------------------------------
-
-if(APPLE)
-  set(juce_core_sources
-      ${MLVG_SOURCE_DIR}/external/juce_core/juce_core.mm
-      ${MLVG_SOURCE_DIR}/external/juce_core/JuceCoreConfig.h
-  )
-  set(juce_core_include_dirs
-  ${MLVG_SOURCE_DIR}/external/juce_core
-  ${MLVG_SOURCE_DIR}
-  )
-else()
-  set(juce_core_sources
-      ${MLVG_SOURCE_DIR}/external/juce_core/juce_core.cpp
-      ${MLVG_SOURCE_DIR}/external/juce_core/JuceCoreConfig.h
-  )
-  set(juce_core_include_dirs
-  ${MLVG_SOURCE_DIR}/external/juce_core
-  ${MLVG_SOURCE_DIR}
-  )
-endif()
-
-
-#--------------------------------------------------------------------
-# make juce-core library
-#--------------------------------------------------------------------
-
-set(target juce-core)
-
-add_library(${target} STATIC ${juce_core_sources})
-
-target_include_directories(${target} PRIVATE ${juce_core_include_dirs})
-
-# set juce-core configuration for this target
-target_compile_definitions(${target} PRIVATE JUCE_APP_CONFIG_HEADER="external/juce_core/JuceCoreConfig.h")
-target_compile_definitions(${target} PUBLIC "$<$<CONFIG:DEBUG>:DEBUG>")
-target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
-
-if(APPLE)
-   # ARC must be off for juce
-   target_compile_options(${target} PRIVATE "-fno-objc-arc")
-
-   # build only active arch for Debug builds
-   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
-
-   # set debug info format
-   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
-endif()
-
-#--------------------------------------------------------------------
-# gather nfd sources
-#--------------------------------------------------------------------
-
-set(nfd_sources
- ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/nfd.h
- ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/nfd.hpp)
-
-if(WIN32)
-   set(nfd_sources_native
-       ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_win.cpp
-   )
-elseif(APPLE)
-   set(nfd_sources_native
-       ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_cocoa.m
-   )
-elseif(UNIX AND NOT APPLE)
-   set(nfd_sources_native
-       ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/nfd_gtk.cpp
-   )
-endif()
-
-list(APPEND nfd_sources ${nfd_sources_native} )
-
-#--------------------------------------------------------------------
-# make nfd library
-#--------------------------------------------------------------------
-
-set(target nfd)
-
-# Define the library
-add_library(${target} STATIC ${nfd_sources})
-
-# Allow includes from include/
-target_include_directories(${target} PUBLIC ${MLVG_SOURCE_DIR}/external/nativefiledialog-extended/src/include/)
-
-# find and link libraries 
-if(WIN32)
-
-elseif(APPLE)
-   find_library(APPKIT_LIBRARY AppKit)
-   target_link_libraries(${target} PRIVATE ${APPKIT_LIBRARY})
-elseif(UNIX AND NOT APPLE)
-   find_package(PkgConfig REQUIRED)
-   pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
-   message("Using GTK version: ${GTK3_VERSION}")
-   target_include_directories(${target} PRIVATE ${GTK3_INCLUDE_DIRS})
-   target_link_libraries(${target} PRIVATE ${GTK3_LIBRARIES})
-endif()
-
-# compiler settings
-if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
- string(REPLACE "/EHsc" "/EHs-c-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
- string(REPLACE "/GR" "/GR-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
- set_property(TARGET ${target} APPEND_STRING PROPERTY STATIC_LIBRARY_OPTIONS /NODEFAULTLIB)
-endif()
-
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
- target_compile_options(${target} PRIVATE -nostdlib -fno-exceptions -fno-rtti)
-endif()
-
-if(APPLE)
-   # build only active arch for Debug builds
-   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
-
-   # set debug info format
-   set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
-endif()
-
-#--------------------------------------------------------------------
-# libsndfile
+# make libsndfile from source
 #--------------------------------------------------------------------
 
 if(MSVC)
@@ -319,7 +160,7 @@ add_subdirectory(source/external/libsndfile)
 
 
 #--------------------------------------------------------------------
-# gather libresample sources
+# make libresample from source
 #--------------------------------------------------------------------
 
 file(GLOB LIBRESAMPLE_SOURCES "${CMAKE_SOURCE_DIR}/source/external/libresample/src/*.c")
@@ -328,11 +169,6 @@ file(GLOB LIBRESAMPLE_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/libresample/
 set(LIBRESAMPLE_PUBLIC_INCLUDES
     "${CMAKE_SOURCE_DIR}/external/libresample/include/libresample.h"
 )
-
-
-#--------------------------------------------------------------------
-# make libresample
-#--------------------------------------------------------------------
 
 set(target libresample)
 
@@ -413,7 +249,7 @@ elseif(WIN32)
 endif()
 
 # add other external libraries
-target_link_libraries(${target} PRIVATE mlvg nfd juce-core SndFile::sndfile libresample)
+target_link_libraries(${target} PRIVATE mlvg SndFile::sndfile libresample)
 
 if(APPLE)
     # ARC must be off for juce
@@ -443,10 +279,8 @@ target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
 # add UI frameworks- note that these appear under 
 # "other linker flags" in XCode and not in its file browser
 if(APPLE)
-    target_link_libraries(${target} PRIVATE "-framework Cocoa")
-    target_link_libraries(${target} PRIVATE "-framework Metal")
-    target_link_libraries(${target} PRIVATE "-framework MetalKit")
-    target_link_libraries(${target} PRIVATE "-framework CoreAudio")
+    target_link_libraries(${target} PRIVATE "-framework Cocoa" "-framework Metal" "-framework MetalKit"
+      "-framework CoreAudio" "-framework AppKit" "-framework UniformTypeIdentifiers")
      target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")   
 elseif(WIN32)
     find_package(OpenGL REQUIRED)

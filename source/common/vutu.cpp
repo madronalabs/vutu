@@ -14,8 +14,6 @@
 #include "vutuProcessor.h"
 #include "vutuController.h"
 
-
-
 #include <utu/utu.h>
 
 #include "MLSDLUtils.h"
