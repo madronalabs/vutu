@@ -92,14 +92,18 @@ void VutuView::layoutView(DrawContext dc)
   ml::Rect textButtonRect(0, 0, buttonWidth, 1);
   
   _view->_widgets["open"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + halfButtonWidth, buttonsY1}));
-  _view->_widgets["analyze"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY1}));
-  _view->_widgets["play"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth, buttonsY2}));
-  _view->_widgets["synthesize"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + buttonWidth, buttonsY2}));
-  _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY3}));
+  _view->_widgets["play_source"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY1}));
+  _view->_widgets["play_synth"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth*2 + halfButtonWidth, buttonsY1}));
+  _view->_widgets["analyze"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth, buttonsY2}));
+  _view->_widgets["synthesize"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY3}));
+  _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth*2 + halfButtonWidth, buttonsY3}));
   _view->_widgets["info"]->setRectProperty("bounds", ml::Rect(0, bottomY, gx, 1));
-  _view->_widgets["sample"]->setRectProperty("bounds", ml::Rect(0, 0, gx, 2));
-  _view->_widgets["partials"]->setRectProperty("bounds", ml::Rect(0, 2, gx, bottomY - 2));
   
+  // big ones
+  _view->_widgets["source"]->setRectProperty("bounds", ml::Rect(0, 0, gx, 2));
+  _view->_widgets["partials"]->setRectProperty("bounds", ml::Rect(0, 2, gx, bottomY - 2));
+  _view->_widgets["synth"]->setRectProperty("bounds", ml::Rect(0, bottomY - 2, gx, 2));
+
   // resize widgets
   forEach< Widget >
   (_view->_widgets, [&](Widget& w)
@@ -191,13 +195,17 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     {"text", "analyze" },
     {"action", "analyze" }
   } );
-  _view->_widgets.add_unique< TextButtonBasic >("play", WithValues{
-    {"text", "play" },
-    {"action", "toggle_play" }
+  _view->_widgets.add_unique< TextButtonBasic >("play_source", WithValues{
+    {"text", "s" },
+    {"action", "toggle_play_source" }
   } );
   _view->_widgets.add_unique< TextButtonBasic >("synthesize", WithValues{
     {"text", "synthesize" },
     {"action", "synthesize" }
+  } );
+  _view->_widgets.add_unique< TextButtonBasic >("play_synth", WithValues{
+    {"text", "play" },
+    {"action", "toggle_play_synth" }
   } );
   _view->_widgets.add_unique< TextButtonBasic >("export", WithValues{
     {"text", "export" },
@@ -214,14 +222,19 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     { "text_spacing", 0.0f }
   } );
   
-  // sample
-  _view->_widgets.add_unique< SampleDisplay >("sample", WithValues{
+  // source
+  _view->_widgets.add_unique< SampleDisplay >("source", WithValues{
   } );
   
   // partials
   _view->_widgets.add_unique< SumuPartialsDisplay >("partials", WithValues{
   } );
   
+  // synth (synthesized sample)
+  _view->_widgets.add_unique< SampleDisplay >("synth", WithValues{
+  } );
+  
+
   // make all the above Widgets visible
   forEach< Widget >
   (_view->_widgets, [&](Widget& w)
@@ -231,8 +244,9 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
    );
   
   // play button disabled until we have a sample
-  _view->_widgets["play"]->setProperty("enabled", false);
-  
+  _view->_widgets["play_source"]->setProperty("enabled", false);
+  _view->_widgets["play_synth"]->setProperty("enabled", false);
+
   _setupWidgets(pdl);
 }
 
@@ -294,7 +308,25 @@ void VutuView::onMessage(Message msg)
         {
           // get Sample pointer
           Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
-          _view->_widgets["sample"]->receiveNamedRawPointer("sample", pSample);
+          _view->_widgets["source"]->receiveNamedRawPointer("sample", pSample);
+          
+          break;
+        }
+          
+        case(hash("set_partials_data")):
+        {
+          // get Partials data pointer
+          SumuPartialsData* pPartials = *reinterpret_cast<SumuPartialsData**>(msg.value.getBlobValue());
+          _view->_widgets["partials"]->receiveNamedRawPointer("partials", pPartials);
+          
+          break;
+        }
+          
+        case(hash("set_synth_data")):
+        {
+          // get Sample pointer
+          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
+          _view->_widgets["synth"]->receiveNamedRawPointer("sample", pSample);
           
           break;
         }

@@ -56,20 +56,19 @@ Interval getParamRangeInPartials(const SumuPartialsData& partialData, Symbol par
 // Get stats for partials data to aid synthesis and drawing.
 // TODO check that time is monotonically increasing
 //
-PartialsStats getPartialsStats(const SumuPartialsData& partialData)
+void SumuPartialsData::calcStats(float maxTimeInSeconds)
 {
-  PartialsStats r;
-  r.timeRange = getParamRangeInPartials(partialData, "time");
-  r.ampRange = getParamRangeInPartials(partialData, "amp");
-  r.bandwidthRange = getParamRangeInPartials(partialData, "bandwidth");
-  r.freqRange = getParamRangeInPartials(partialData, "freq");
-  r.nPartials = partialData.partials.size();
+  stats.timeRange = getParamRangeInPartials(*this, "time");
+  stats.ampRange = getParamRangeInPartials(*this, "amp");
+  stats.bandwidthRange = getParamRangeInPartials(*this, "bandwidth");
+  stats.freqRange = getParamRangeInPartials(*this, "freq");
+  stats.nPartials = partials.size();
   
   // get max frames by looking at size of time data in all partials
   size_t maxFrames = 0;
-  for(int i=0; i<r.nPartials; ++i)
+  for(int i=0; i<stats.nPartials; ++i)
   {
-    const SumuPartial& partial = partialData.partials[i];
+    const SumuPartial& partial = partials[i];
     size_t nFrames = partial.time.size();
     if(nFrames > maxFrames)
     {
@@ -78,24 +77,24 @@ PartialsStats getPartialsStats(const SumuPartialsData& partialData)
   }
     
   // get min, max time for each partial
-  r.partialTimeRanges.clear();
-  for(int i=0; i<r.nPartials; ++i)
+  stats.partialTimeRanges.clear();
+  for(int i=0; i<stats.nPartials; ++i)
   {
-    const SumuPartial& partial = partialData.partials[i];
+    const SumuPartial& partial = partials[i];
     if(partial.time.size() > 0)
     {
       const auto& timeVec = partial.time;
       Interval ptr = getVectorRange(timeVec);
-      r.partialTimeRanges.push_back(ptr);
+      stats.partialTimeRanges.push_back(ptr);
     }
     else
     {
-      r.partialTimeRanges.push_back(Interval{0, 0});
+      stats.partialTimeRanges.push_back(Interval{0, 0});
     }
   }
   
-  r.maxFrames = maxFrames;
-  return r;
+  stats.maxFrames = maxFrames;
+  stats.maxTimeInSeconds = maxTimeInSeconds;
 }
 
 // get an interpolated frame of data from the partial index p of the SumuPartialsData at time t.

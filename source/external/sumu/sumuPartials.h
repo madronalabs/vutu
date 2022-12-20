@@ -18,6 +18,7 @@ static constexpr size_t kPartialsPerVoice{ 64 };
 struct PartialsStats
 {
   // get range of values for each parameter (except phase)
+  float maxTimeInSeconds; // duration of the whole analyzed sample
   Interval timeRange; // min and max time in all partials
   Interval ampRange;
   Interval bandwidthRange;
@@ -40,6 +41,8 @@ struct SumuPartialsData
 {
   PartialsStats stats;
   std::vector< SumuPartial > partials;
+  
+  void calcStats(float maxTimeInSeconds);
 };
 
 struct PartialFrame

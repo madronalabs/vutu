@@ -16,14 +16,13 @@
 
 #include "sumuDSP.h"
 
+#include "loris.h"
+
 using namespace ml;
 
-constexpr int kMaxProcessBlockFrames = 4096;
 constexpr int kInputChannels = 0;
 constexpr int kOutputChannels = 2;
 constexpr int kSampleRate = 48000;
-constexpr float kOutputGain = 0.1f;
-constexpr float kFreqLo = 40, kFreqHi = 4000;
 
 void readParameterDescriptions(ParameterDescriptionList& params);
 
@@ -49,14 +48,18 @@ private:
   Path _controllerName;
   
   int testCounter{0};
-
-  void togglePlaybackState();
-
+  
   Symbol playbackState{"off"};
   size_t playbackSampleIdx{0};
   //size_t playbackCounter{0};
   
-  sumu::Sample* _pSourceSample; // points to Sample owned by Controller
-  sumu::Sample _playbackSample;
-  
+  sumu::Sample* _pSourceSampleInController{nullptr};
+  sumu::Sample _sourceSample;
+  sumu::Sample* _pSynthesizedSample{nullptr};
+
+
+  Loris::PartialList* _pLorisPartials{ nullptr };
+
+  void togglePlaybackState(Symbol whichSample);
+
 };

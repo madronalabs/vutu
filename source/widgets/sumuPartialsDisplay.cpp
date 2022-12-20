@@ -9,8 +9,8 @@ void SumuPartialsDisplay::resize(ml::DrawContext dc)
   NativeDrawContext* nvg = getNativeContext(dc);
 
   // constant background layer size, for now.
-  int w = 564;
-  int h = 170;
+  int w = 2000;
+  int h = 800;
   int bw = 0;
   int bh = 0;
   
@@ -103,17 +103,20 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
   Interval yRange{h - 1.f, 0.f};
 
   constexpr float kMinLineLength{2.f};
-  auto xToTime = projections::linear({0.f, w - 1.f}, _pPartials->stats.timeRange);
-  auto timeToX = projections::linear(_pPartials->stats.timeRange, {0.f, w - 1.f});
+  Interval sampleTimeRange{0, _pPartials->stats.maxTimeInSeconds};
+  auto xToTime = projections::linear({0.f, w - 1.f}, sampleTimeRange );
+  auto timeToX = projections::linear(sampleTimeRange, {0.f, w - 1.f});
   auto freqRange = _pPartials->stats.freqRange;
-  auto freqToY = projections::intervalMap(freqRange, yRange, projections::log(freqRange));
+  //auto freqToY = projections::intervalMap(freqRange, yRange, projections::unity);//exp(freqRange));
+  
+  auto freqToY = projections::linear(freqRange, yRange);
   
   // drawn amplidutes range from -60dB to max in partials
   auto ampRange = _pPartials->stats.ampRange;
   ampRange.mX1 = dBToAmp(-60);
   
   Interval thicknessRange{0, h/16.f};
-  auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::exp(thicknessRange));
+  auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::unity);
   // projections::printTable(ampToThickness, "ampToThickness", ampRange, 5);
   auto bandwidthToUnity = projections::linear(_pPartials->stats.bandwidthRange, {0, 1});
 
@@ -130,7 +133,8 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     const auto& partial = _pPartials->partials[p];
     size_t framesInPartial = partial.time.size();
     
-    nvgStrokeColor(nvg, sineColor);// TODO make avg color for stroke?
+//    nvgStrokeColor(nvg, sineColor);// TODO make avg color for stroke?
+    nvgStrokeWidth(nvg, 3); // TEMP
     nvgBeginPath(nvg);
     
     float x1 = 0.;
@@ -143,7 +147,7 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
 
       totalFramesRead++;
       
-      //if(frame.amp > 0.f)
+      if(frame.amp > 0.f)
       if((i == 0) || (x > x1 + kMinLineLength))
       {
         x1 = x;
@@ -158,6 +162,9 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
         
         // adding noise fades opacity up to 1
         float bw = bandwidthToUnity(frame.bandwidth);
+        
+        // std::cout << "frame " << i << " bw " << bw << "\n";
+        
         pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
         
         /*
@@ -174,6 +181,7 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
         float y1 = clamp(y - thickness/2.f, 0.f, float(h));
         float y2 = clamp(y + thickness/2.f, 0.f, float(h));
         
+        /*
         if(i == 0)
         {
           nvgMoveTo(nvg, x, y);
@@ -182,12 +190,19 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
         {
           nvgLineTo(nvg, x, y);
         }
+        */
+        nvgStrokeColor(nvg, partialColor);
+        nvgBeginPath(nvg);
+
+        nvgMoveTo(nvg, x, y1);
+        nvgLineTo(nvg, x, y2);
+        nvgStroke(nvg);
       }
     }
     
     
     //nvgStrokeColor(nvg, sineColor);
-    nvgStroke(nvg);
+   // nvgStroke(nvg);
   }
 
   

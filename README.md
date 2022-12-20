@@ -10,6 +10,13 @@ The following libraries are required:
 - [mlvg](https://github.com/madronalabs/mlvg)
 
 Vutu can be built with CMake:
+```
 - mkdir build
 - cd build
 - cmake -GXcode .. (for Mac)
+```
+
+The libsndfile and libresample libraries are also included. Because some configuration is required to get these to work, they are compiled here from source. 
+
+Everything is cross-platform but I'm currently working on Mac and have not been testing on Windows.
+

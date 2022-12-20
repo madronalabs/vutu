@@ -52,14 +52,16 @@ message("madronalib library should be at: " ${MADRONALIB_LIBRARY_DIR}/${madronal
 message("cmake lib dir: " ${CMAKE_INSTALL_FULL_LIBDIR} )
 
 #--------------------------------------------------------------------
-# find loris
+# find loris library
 #--------------------------------------------------------------------
 
 if(APPLE)
     set (LORIS_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/loris")
+    set (LORIS_CPP_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
     set (LORIS_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
 elseif(WIN32)
     set (LORIS_INCLUDE_DIR "C:/Program Files/loris/include")
+    set (LORIS_CPP_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
     set (LORIS_LIBRARY_DIR "C:/Program Files/loris/lib")
 else()
 endif()
@@ -71,7 +73,7 @@ message("loris headers should be in: " ${LORIS_INCLUDE_DIR} )
 message("loris library should be at: " ${LORIS_LIBRARY_DIR}/${loris_NAME} )
 
 #--------------------------------------------------------------------
-# find mlvg 
+# find mlvg library
 #--------------------------------------------------------------------
 
 if(APPLE)
@@ -89,12 +91,6 @@ set(mlvg_NAME mlvg$<$<CONFIG:Debug>:-debug>)
 
 message("mlvg headers should be in: " ${MLVG_INCLUDE_DIR} )
 message("mlvg library should be at: " ${MLVG_LIBRARY_DIR}/${mlvg_NAME} )
-
-#--------------------------------------------------------------------
-# find mlvg sources - including our juce-core subset and nfd
-#--------------------------------------------------------------------
-
-set (MLVG_SOURCE_DIR "../mlvg/source")
 
 #--------------------------------------------------------------------
 # compile binary resources
@@ -165,10 +161,6 @@ add_subdirectory(source/external/libsndfile)
 
 file(GLOB LIBRESAMPLE_SOURCES "${CMAKE_SOURCE_DIR}/source/external/libresample/src/*.c")
 file(GLOB LIBRESAMPLE_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/libresample/src/*.h")
-    
-set(LIBRESAMPLE_PUBLIC_INCLUDES
-    "${CMAKE_SOURCE_DIR}/external/libresample/include/libresample.h"
-)
 
 set(target libresample)
 
@@ -182,8 +174,8 @@ target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
 #--------------------------------------------------------------------
 
 # source_group(mlvg-native REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/vg/native.*")
-source_group(nanovg REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/external/nanovg/src.*|${MLVG_SOURCE_DIR}/external/MetalNanoVG/src.*")
-source_group(nanosvg REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/external/nanosvg/src.*")
+# source_group(nanovg REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/external/nanovg/src.*|${MLVG_SOURCE_DIR}/external/MetalNanoVG/src.*")
+# source_group(nanosvg REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/external/nanosvg/src.*")
 
 #--------------------------------------------------------------------
 # make mlvg / SDL2 application target 
@@ -199,15 +191,11 @@ file(GLOB COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/source/common/*.h")
 file(GLOB SUMU_SOURCES "${CMAKE_SOURCE_DIR}/source/external/sumu/*.cpp")
 file(GLOB SUMU_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/sumu/*.h")
 
-file(GLOB UTU_SOURCES "${CMAKE_SOURCE_DIR}/source/external/utu/*.cpp")
-file(GLOB UTU_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/utu/*.h")
-
 file(GLOB WIDGETS_SOURCES "${CMAKE_SOURCE_DIR}/source/widgets/*.cpp")
 file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
 
-# add utu source
-list(APPEND app_sources ${COMMON_SOURCES} ${SUMU_SOURCES} ${UTU_SOURCES} ${WIDGETS_SOURCES} )
-list(APPEND app_sources ${COMMON_INCLUDES} ${SUMU_INCLUDES} ${UTU_INCLUDES} ${WIDGETS_INCLUDES} )
+list(APPEND app_sources ${COMMON_SOURCES} ${SUMU_SOURCES} ${WIDGETS_SOURCES} )
+list(APPEND app_sources ${COMMON_INCLUDES} ${SUMU_INCLUDES} ${WIDGETS_INCLUDES} )
 
 add_executable(${target} ${app_sources})
 
@@ -218,6 +206,7 @@ target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/extern
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/utu" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/libresample/include" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/../loris/src" )
 
 # add SDL2
 find_package(SDL2 REQUIRED)
@@ -243,9 +232,9 @@ endif()
 # add mlvg library
 target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 if(APPLE)
-    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${mlvg_NAME}.a")   
+    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/lib${mlvg_NAME}.a")   
 elseif(WIN32)
-    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${mlvg_NAME}.lib")
+    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/${mlvg_NAME}.lib")
 endif()
 
 # add other external libraries

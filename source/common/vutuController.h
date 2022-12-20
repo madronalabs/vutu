@@ -11,7 +11,9 @@
 #include "vutuParameters.h"
 #include "vutuProcessor.h"
 #include "vutuView.h"
+
 #include "sumuDSP.h"
+#include "sumuPartials.h"
 
 #include "sndfile.hh"
 
@@ -19,7 +21,6 @@
 
 using namespace ml;
 
-constexpr int kChangeQueueSize{128};
 
 //-----------------------------------------------------------------------------
 class VutuController final:
@@ -43,10 +44,15 @@ public:
 private:
   
   sumu::Sample _sample;
-  Loris::PartialList* _partials{ nullptr };
+  std::unique_ptr< Loris::PartialList > _lorisPartials;
+  std::unique_ptr< SumuPartialsData > _sumuPartials;
 
+  sumu::Sample _synthesizedSample;
+  
+  void _clearPartialsData();
   int _loadSampleFromDialog();
   int analyzeSample();
+  void synthesize();
   
   // the state to which we can revert, stored as normalized values.
   Tree< Value > _revertState;

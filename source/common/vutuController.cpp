@@ -2,10 +2,6 @@
 // (c) 2020, Madrona Labs LLC, all rights reserved
 // see LICENSE.txt for details
 
-
-// use clipboard code from VST3 SDK
-//#include "public.sdk/source/common/systemclipboard.h"
-
 #include "vutuController.h"
 #include "vutuView.h"
 #include "vutu.h"
@@ -18,17 +14,43 @@
 #include <chrono>
 
 #include "MLSerialization.h"
+#include "sumuPartials.h"
 
 #include "mlvg.h"
-
-// includes in mlvg - TODO wrap
 #include "miniz.h"
 #include "nfd.h"
 
+// Loris includes
 #include "loris.h"
+#include "PartialList.h"
+#include "Synthesizer.h"
 
 using namespace ml;
 using namespace sumu;
+
+
+void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pSumu, float maxTimeInSeconds)
+{
+  for (const auto& partial : *pLoris) {
+
+    SumuPartial sp;
+    for (auto it = partial.begin(); it != partial.end(); it++) {
+      sp.time.push_back(it.time());
+      sp.freq.push_back(it->frequency());
+      sp.amp.push_back(it->amplitude());
+      sp.bandwidth.push_back(it->bandwidth());
+      sp.phase.push_back(it->phase());
+    }
+    
+    pSumu->partials.push_back(sp);
+    
+  }
+  
+  std::cout << "_lorisToSumuPartials: " << pSumu->partials.size() << " partials. \n ";
+  
+  pSumu->calcStats(maxTimeInSeconds);// = getPartialsStats(*_partialsData);
+
+}
 
 
 //-----------------------------------------------------------------------------
@@ -44,10 +66,7 @@ VutuController::~VutuController()
 {
   // don't stop the master Timers-- there may be other plugin instances using it!
   // std::cout << "VutuController: BYE!\n";
-  if(_partials)
-  {
-    destroyPartialList(_partials);
-  }
+
 }
 
 void VutuController::_debug()
@@ -60,6 +79,19 @@ void VutuController::_debug()
 void VutuController::_printToConsole(TextFragment t)
 {
   sendMessageToActor(_viewName, {"info/set_prop/text", t});
+}
+
+void VutuController::_clearPartialsData()
+{
+  // clear data
+  _sumuPartials = std::make_unique< SumuPartialsData >();
+  _lorisPartials = std::make_unique< Loris::PartialList >();
+
+  // send empty Partials to View and Processor
+  SumuPartialsData* pPartials = _sumuPartials.get();
+  Value partialsPtrValue(&pPartials, sizeof(SumuPartialsData*));
+  sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
+  sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
 }
 
 int VutuController::_loadSampleFromDialog()
@@ -104,7 +136,7 @@ int VutuController::_loadSampleFromDialog()
     std::cout << "        samplerate: " << fileInfo.samplerate << "\n";
     std::cout << "        channels: " << fileInfo.channels << "\n";
     
-    constexpr size_t kMaxSeconds = 32;
+    constexpr size_t kMaxSeconds = 8;
     size_t fileSizeInFrames = fileInfo.frames;
     size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
 
@@ -142,8 +174,9 @@ int VutuController::_loadSampleFromDialog()
         pData[i] = pData[i*fileInfo.channels];
       }
       _sample.data.resize(framesRead);
-    }
 
+      _clearPartialsData();
+    }
   }
   return OK;
 }
@@ -151,7 +184,7 @@ int VutuController::_loadSampleFromDialog()
 int VutuController::analyzeSample()
 {
   int status{ false };
-  std::cout << "VutuController::analysing...";
+  std::cout << "VutuController::analyzing...";
   
   auto totalFrames = _sample.data.size();
   if(!totalFrames) return status;
@@ -173,35 +206,66 @@ int VutuController::analyzeSample()
   auto floor = getPlainValue(params, "amp_floor");
 
   analyzer_configure(res, width);
-  analyzer_setFreqDrift( drift );
-  analyzer_setAmpFloor( floor );
+  analyzer_setFreqDrift(drift);
+  analyzer_setAmpFloor(floor);
+    
+  // make new partial list and give ownership to _lorisPartials
+  Loris::PartialList* newPartials = createPartialList();
+  _lorisPartials = std::make_unique< Loris::PartialList >(*newPartials);
   
-  // loris analyze
-  if(_partials)
-  {
-    destroyPartialList(_partials);
-  }
-  _partials = createPartialList();
+  analyze( vx.data(), totalFrames, sr, _lorisPartials.get() );
   
-  analyze( vx.data(), totalFrames, sr, _partials );
+  float maxTimeInSeconds = totalFrames / float(sr);
   
   // loris channelize and distill
   LinearEnvelope * reference = 0;
   float minFreq = res;
   float maxFreq = res*1.5f;
-  reference = createFreqReference( _partials, minFreq, maxFreq, 0 );
-  channelize( _partials, reference, 1 );
-  distill( _partials );
+  reference = createFreqReference( _lorisPartials.get(), minFreq, maxFreq, 0 );
+  channelize( _lorisPartials.get(), reference, 1 );
+  distill( _lorisPartials.get() );
   destroyLinearEnvelope( reference );
   reference = nullptr;
   
-  if(partialList_size(_partials) > 0)
+  if(partialList_size(_lorisPartials.get()) > 0)
   {
     status = true;
+    _sumuPartials = std::make_unique< SumuPartialsData >();
+    _lorisToSumuPartials(_lorisPartials.get(), _sumuPartials.get(), maxTimeInSeconds);
   }
 
   return status;
 }
+
+// generate the synthesized audio from the Loris partials.
+void VutuController::synthesize()
+{
+  std::vector<double> samples;
+  Loris::Synthesizer::Parameters params;
+  params.sampleRate = kSampleRate;
+  
+  std::cout << "VutuController: synthesize: sr = " << params.sampleRate << "\n";
+  
+//  playbackState = "off";
+//  sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
+  
+  if(!_lorisPartials.get()) return;
+  
+  Loris::Synthesizer synth(params, samples);
+  synth.synthesize(_lorisPartials->begin(), _lorisPartials->end());
+  
+  // convert samples to floats
+  std::cout << "VutuController: synthesize: " << samples.size() << "samples synthesized. \n";
+  
+  if(!samples.size()) return;
+  
+  _synthesizedSample.data.resize(samples.size());
+  for(int i=0; i<samples.size(); ++i)
+  {
+    _synthesizedSample.data[i] = samples[i];
+  }
+}
+
 
 void VutuController::onMessage(Message m)
 {
@@ -227,9 +291,14 @@ void VutuController::onMessage(Message m)
       Path whatProp = tail(addr);
       switch(hash(head(whatProp)))
       {
-        case(hash("playback_progress")):
+        case(hash("source_progress")):
         {
-          sendMessageToActor(_viewName, {"widget/sample/set_prop/progress", m.value});
+          sendMessageToActor(_viewName, {"widget/source/set_prop/progress", m.value});
+          break;
+        }
+        case(hash("synth_progress")):
+        {
+          sendMessageToActor(_viewName, {"widget/synth/set_prop/progress", m.value});
           break;
         }
       }
@@ -237,8 +306,7 @@ void VutuController::onMessage(Message m)
     }
     case(hash("do")):
     {
-      Path whatAction = tail(addr);
-      switch(hash(head(whatAction)))
+      switch(hash(second(addr)))
       {
         case(hash("open")):
         {
@@ -250,8 +318,16 @@ void VutuController::onMessage(Message m)
             sendMessageToActor(_processorName, {"do/set_audio_data", samplePtrValue});
             sendMessageToActor(_viewName, {"do/set_audio_data", samplePtrValue});
             
-            sendMessageToActor(_viewName, {"widget/play/set_prop/enabled", true});
-            //sendMessageToActor(_processorName, {"do/stop_play"});
+            sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", true});
+
+            
+            // on success, send empty Partials to View and Processor
+            _clearPartialsData();
+            
+            // SumuPartialsData* pPartials = _sumuPartials.get();
+            // Value partialsPtrValue(&pPartials, sizeof(SumuPartialsData*));
+            // sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
+            // sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
           }
           else
           {
@@ -260,9 +336,15 @@ void VutuController::onMessage(Message m)
           messageHandled = true;
           break;
         }
-        case(hash("toggle_play")):
+        case(hash("toggle_play_source")):
         {
-          sendMessageToActor(_processorName, {"do/toggle_play"});
+          sendMessageToActor(_processorName, {"do/toggle_play/source"});
+          messageHandled = true;
+          break;
+        }
+        case(hash("toggle_play_synth")):
+        {
+          sendMessageToActor(_processorName, {"do/toggle_play/synth"});
           messageHandled = true;
           break;
         }
@@ -272,29 +354,67 @@ void VutuController::onMessage(Message m)
           {
             if(analyzeSample())
             {
+              // on success, send Sumu Partials to View and Processor
+              SumuPartialsData* pPartials = _sumuPartials.get();
+              Value partialsPtrValue(&pPartials, sizeof(SumuPartialsData*));
+              sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
+              sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
               
-              // on success, send to View and Processor
-              sumu::Sample* pSample = &_sample;
-              Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
-              sendMessageToActor(_processorName, {"do/set_partials_data", samplePtrValue});
-              sendMessageToActor(_viewName, {"do/set_partials_data", samplePtrValue});
+              // on success, send Loris Partials to View and Processor
+              Loris::PartialList* pLorisPartials = _lorisPartials.get();
+              Value lorisPartialsPtrValue(&pLorisPartials, sizeof(Loris::PartialList*));
+              sendMessageToActor(_processorName, {"do/set_loris_partials_data", lorisPartialsPtrValue});
+              sendMessageToActor(_viewName, {"do/set_loris_partials_data", lorisPartialsPtrValue});
             }
           }
-
+          
+          messageHandled = true;
+          break;
+        }
+        case(hash("synthesize")):
+        {
+          Loris::PartialList* pLorisPartials = _lorisPartials.get();
+          if(pLorisPartials)
+          if(pLorisPartials->size() > 0)
+          {
+            synthesize();
+            
+            // send synthesized audio to View and Processor
+            sumu::Sample* pSample = &_synthesizedSample;
+            Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
+            sendMessageToActor(_processorName, {"do/set_synth_data", samplePtrValue});
+            sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
+            
+            sendMessageToActor(_viewName, {"widget/play_synth/set_prop/enabled", true});
+          }
+          
           messageHandled = true;
           break;
         }
         case(hash("playback_started")):
         {
-          // switch play button text
-          sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("stop")});
+          // switch play_source button or play_synth button text
+          switch(hash(third(addr)))
+          {
+            case(hash("source")):
+            {
+              sendMessageToActor(_viewName, {"widget/play_source/set_prop/text", TextFragment("stop")});
+              break;
+            }
+            case(hash("synth")):
+            {
+              sendMessageToActor(_viewName, {"widget/play_synth/set_prop/text", TextFragment("stop")});
+              break;
+            }
+          }
           messageHandled = true;
           break;
         }
         case(hash("playback_stopped")):
         {
-          // switch play button text
-          sendMessageToActor(_viewName, {"widget/play/set_prop/text", TextFragment("play")});
+          // switch play button texts
+          sendMessageToActor(_viewName, {"widget/play_source/set_prop/text", TextFragment("play")});
+          sendMessageToActor(_viewName, {"widget/play_synth/set_prop/text", TextFragment("play")});
           sendMessageToActor(_viewName, {"widget/sample/set_prop/progress", 0.f});
           messageHandled = true;
           break;

@@ -13,6 +13,11 @@
 
 #include "libresample.h"
 
+// Loris includes
+#include "loris.h"
+#include "PartialList.h"
+#include "Synthesizer.h"
+
 using namespace ml;
 using namespace sumu;
 
@@ -25,22 +30,22 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 {
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
-    { "range", { 20, 2000 } },
+    { "range", { 4, 400 } },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "window_width" },
-    { "range", {40, 4000} },
+    { "range", {128, 2048} },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "amp_floor" },
-    { "range", {-100, -30} },
-    { "plaindefault", -90 },
+    { "range", {-60, -10} },
+    { "plaindefault", -45 },
     { "units", "dB" }
   } ) );
   
@@ -176,23 +181,39 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
  // std::cout << "gain: " << gain << "\n";
   DSPVector sampleVec;
   
-  if(playbackState == "on")
+  sumu::Sample* samplePlaying{ nullptr };
+  Symbol viewProperty;
+  if(playbackState == "source")
   {
-    if(_playbackSample.data.size() > 0)
+    samplePlaying = &_sourceSample;
+    viewProperty = "source_progress";
+  }
+  else if(playbackState == "synth")
+  {
+    if(_pSynthesizedSample)
     {
-      load(sampleVec, &(_playbackSample.data[playbackSampleIdx]));
+      samplePlaying = _pSynthesizedSample;
+      viewProperty = "synth_progress";
+    }
+  }
+
+  if(samplePlaying)
+  {
+    if(samplePlaying->data.size() > 0)
+    {
+      load(sampleVec, &(samplePlaying->data[playbackSampleIdx]));
       playbackSampleIdx += kFloatsPerDSPVector;
     }
     
-    if(playbackSampleIdx >= _playbackSample.data.size())
+    if(playbackSampleIdx >= samplePlaying->data.size())
     {
       playbackState = "off";
       playbackSampleIdx = 0;
       sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
     }
     
-    float progress = float(playbackSampleIdx) / float(_playbackSample.data.size());
-    sendMessageToActor(_controllerName, Message{"set_prop/playback_progress", progress});
+    float progress = float(playbackSampleIdx) / float(samplePlaying->data.size());
+    sendMessageToActor(_controllerName, Message{Path{"set_prop", viewProperty}, progress});
   }
   
   // Running the sine generators makes DSPVectors as output.
@@ -202,23 +223,34 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
 }
 
 // toggle current playback state and tell controller
-void VutuProcessor::togglePlaybackState()
+void VutuProcessor::togglePlaybackState(Symbol whichSample)
 {
-  if(playbackState == "off")
-  {
-    if(_playbackSample.data.size() > 0)
-    {
-      playbackState = "on";
-      playbackSampleIdx = 0;
-      sendMessageToActor(_controllerName, Message{"do/playback_started"});
-    }
-  }
-  else
+  // if either sample is playing, stop
+  if(playbackState != "off")
   {
     playbackState = "off";
     playbackSampleIdx = 0;
     sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
-    sendMessageToActor(_controllerName, Message{"set_prop/playback_progress", 0});
+    sendMessageToActor(_controllerName, Message{"set_prop/source_progress", 0});
+    sendMessageToActor(_controllerName, Message{"set_prop/synth_progress", 0});
+  }
+  else if(whichSample == "source")
+  {
+    if(_sourceSample.data.size() > 0)
+    {
+      playbackState = "source";
+      playbackSampleIdx = 0;
+      sendMessageToActor(_controllerName, Message{"do/playback_started/source"});
+    }
+  }
+  else if(whichSample == "synth")
+  {
+    if(_pSynthesizedSample && _pSynthesizedSample->data.size() > 0)
+    {
+      playbackState = "synth";
+      playbackSampleIdx = 0;
+      sendMessageToActor(_controllerName, Message{"do/playback_started/synth"});
+    }
   }
 }
 
@@ -247,33 +279,56 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          _pSourceSample = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
+          _pSourceSampleInController = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
           
           int currentSampleRate = _processData.sampleRate;
           std::cout << "VutuProcessor: sr = " << currentSampleRate << "\n";
-          std::cout << "    sample input: sr = " << _pSourceSample->sampleRate << "\n";
-
+          std::cout << "    sample input: sr = " << _pSourceSampleInController->sampleRate << "\n";
+          
           // resample to current system sample rate for playback
-          _playbackSample.sampleRate = currentSampleRate;
-          normalize(_pSourceSample);
-          resample(_pSourceSample, &_playbackSample);
-          break;
-        }
-    
-        case(hash("stop_play")):
-        {
-          if(playbackState != "off")
-          {
-            togglePlaybackState();
-          }
+          _sourceSample.sampleRate = currentSampleRate;
+          
+          // TODO normalize there
+          normalize(_pSourceSampleInController);
+          resample(_pSourceSampleInController, &_sourceSample);
           break;
         }
           
-        case(hash("toggle_play")):
+        case(hash("set_loris_partials_data")):
         {
-          togglePlaybackState();
+          playbackState = "off";
+          sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
+          
+          // get pointer from message
+          Loris::PartialList* pPartials = *reinterpret_cast<Loris::PartialList**>(msg.value.getBlobValue());
+          _pLorisPartials = *reinterpret_cast<Loris::PartialList**>(msg.value.getBlobValue());
+          
+
+          std::cout << "VutuProcessor: got new loris partials: n = " << _pLorisPartials->size() << "\n";
+
           break;
         }
+
+        case(hash("set_synth_data")):
+        {
+          playbackState = "off";
+          sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
+          
+          // get pointer from message
+          _pSynthesizedSample = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
+
+          break;
+        }
+          
+
+        case(hash("toggle_play")):
+        {
+          // play either source or synth
+          togglePlaybackState(third(msg.address));
+          break;
+        }
+
+
       }
       break;
     }
