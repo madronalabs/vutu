@@ -12,24 +12,6 @@ using namespace ml;
 
 class SumuPartialsDisplay : public Widget
 {
-    
-  /*
-  struct SumuVector
-  {
-    union _Data
-    {
-      SIMDVectorFloat _align[kPartialsPerVoice * kFloatsPerDSPVector];   // unused except to force alignment
-      std::array<float, kPartialsPerVoice * kFloatsPerDSPVector> mArrayData;  // for constexpr ctor
-      float asFloat[kPartialsPerVoice * kFloatsPerDSPVector];
-      
-      _Data() {}
-      constexpr _Data(std::array<float, kPartialsPerVoice * kFloatsPerDSPVector> a) : mArrayData(a) {}
-    };
-  };
-*/
-  
-  
-
   void paintPartials(ml::DrawContext dc);
 
   bool _initialized{ false };

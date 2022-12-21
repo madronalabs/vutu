@@ -102,7 +102,8 @@ int main(int argc, char *argv[])
     
     appController.sendAllParamsToView();
     appController.sendAllParamsToProcessor();
-
+    appController.setButtonEnableStates();
+    
     // start Actor and audio processing
     appProcessor.start();
     appProcessor.startAudio();

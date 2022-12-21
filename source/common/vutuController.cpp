@@ -69,6 +69,20 @@ VutuController::~VutuController()
 
 }
 
+void VutuController::setButtonEnableStates()
+{
+  bool sourceOK = (_sourceSample.data.size() > 0);
+  sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", sourceOK});
+  sendMessageToActor(_viewName, {"widget/analyze/set_prop/enabled", sourceOK});
+  
+  Loris::PartialList* pLorisPartials = _lorisPartials.get();
+  bool partialsOK = pLorisPartials && (pLorisPartials->size() > 0);
+  sendMessageToActor(_viewName, {"widget/synthesize/set_prop/enabled", partialsOK});
+  sendMessageToActor(_viewName, {"widget/export/set_prop/enabled", partialsOK});
+  
+  sendMessageToActor(_viewName, {"widget/play_synth/set_prop/enabled", (_synthesizedSample.data.size() > 0)});
+}
+
 void VutuController::_debug()
 {
 //  std::cout << "VutuController: " << getMessagesAvailable() << " messages in queue. \n";
@@ -81,17 +95,50 @@ void VutuController::_printToConsole(TextFragment t)
   sendMessageToActor(_viewName, {"info/set_prop/text", t});
 }
 
+
+void VutuController::clearSourceSample()
+{
+  _sourceSample.clear();
+}
+
+
+void VutuController::broadcastSourceSample()
+{
+  // send synthesized audio to View and Processor
+  sumu::Sample* pSample = &_sourceSample;
+  Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
+  sendMessageToActor(_processorName, {"do/set_source_data", samplePtrValue});
+  sendMessageToActor(_viewName, {"do/set_source_data", samplePtrValue});
+}
+
 void VutuController::_clearPartialsData()
 {
   // clear data
   _sumuPartials = std::make_unique< SumuPartialsData >();
   _lorisPartials = std::make_unique< Loris::PartialList >();
+}
 
-  // send empty Partials to View and Processor
+void VutuController::broadcastPartialsData()
+{
+  // send Partials to View and Processor
   SumuPartialsData* pPartials = _sumuPartials.get();
   Value partialsPtrValue(&pPartials, sizeof(SumuPartialsData*));
   sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
   sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
+}
+
+void VutuController::_clearSynthesizedSample()
+{
+  _synthesizedSample.clear();
+}
+
+void VutuController::broadcastSynthesizedSample()
+{
+  // send synthesized audio to View and Processor
+  sumu::Sample* pSample = &_synthesizedSample;
+  Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
+  sendMessageToActor(_processorName, {"do/set_synth_data", samplePtrValue});
+  sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
 }
 
 int VutuController::_loadSampleFromDialog()
@@ -123,7 +170,7 @@ int VutuController::_loadSampleFromDialog()
   if(f)
   {
     std::cout << "file to load: " << filePath << "\n";
-    std::cout << "init sr: " << _sample.sampleRate << "\n";
+    std::cout << "init sr: " << _sourceSample.sampleRate << "\n";
 
     // load the file
 
@@ -145,9 +192,9 @@ int VutuController::_loadSampleFromDialog()
     
     _printToConsole(TextFragment("loading ", pathToText(filePath), "..."));
     
-    _sample.data.resize(samplesToRead);
-    float* pData = _sample.data.data();
-    _sample.sampleRate = fileInfo.samplerate;
+    _sourceSample.data.resize(samplesToRead);
+    float* pData = _sourceSample.data.data();
+    _sourceSample.sampleRate = fileInfo.samplerate;
     
     sf_count_t framesRead = sf_readf_float(file, pData, static_cast<sf_count_t>(framesToRead));
     
@@ -173,20 +220,23 @@ int VutuController::_loadSampleFromDialog()
       {
         pData[i] = pData[i*fileInfo.channels];
       }
-      _sample.data.resize(framesRead);
+      _sourceSample.data.resize(framesRead);
 
-      _clearPartialsData();
     }
+
+    _sourceSample.normalize();
+
   }
   return OK;
 }
+
 
 int VutuController::analyzeSample()
 {
   int status{ false };
   std::cout << "VutuController::analyzing...";
   
-  auto totalFrames = _sample.data.size();
+  auto totalFrames = _sourceSample.data.size();
   if(!totalFrames) return status;
   
   // make double-precision version of input
@@ -194,10 +244,10 @@ int VutuController::analyzeSample()
   vx.resize(totalFrames);
   for(int i=0; i<totalFrames; ++i)
   {
-    vx[i] = _sample.data[i];
+    vx[i] = _sourceSample.data[i];
   }
   
-  int sr = _sample.sampleRate;
+  int sr = _sourceSample.sampleRate;
   
   // TEST
   auto res = getPlainValue(params, "resolution");
@@ -264,6 +314,9 @@ void VutuController::synthesize()
   {
     _synthesizedSample.data[i] = samples[i];
   }
+  
+  _synthesizedSample.normalize();
+
 }
 
 
@@ -310,29 +363,16 @@ void VutuController::onMessage(Message m)
       {
         case(hash("open")):
         {
-          if(_loadSampleFromDialog())
-          {
-            // on success, send to View and Processor
-            sumu::Sample* pSample = &_sample;
-            Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
-            sendMessageToActor(_processorName, {"do/set_audio_data", samplePtrValue});
-            sendMessageToActor(_viewName, {"do/set_audio_data", samplePtrValue});
-            
-            sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", true});
+          clearSourceSample();
+          _clearPartialsData();
+          _clearSynthesizedSample();
+          
+          _loadSampleFromDialog();
 
-            
-            // on success, send empty Partials to View and Processor
-            _clearPartialsData();
-            
-            // SumuPartialsData* pPartials = _sumuPartials.get();
-            // Value partialsPtrValue(&pPartials, sizeof(SumuPartialsData*));
-            // sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
-            // sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
-          }
-          else
-          {
-            sendMessageToActor(_viewName, {"widget/play/set_prop/enabled", false});
-          }
+          broadcastSourceSample();
+          broadcastPartialsData();
+          broadcastSynthesizedSample();
+          setButtonEnableStates();
           messageHandled = true;
           break;
         }
@@ -350,44 +390,30 @@ void VutuController::onMessage(Message m)
         }
         case(hash("analyze")):
         {
-          if(_sample.data.size() > 0)
+          _clearPartialsData();
+          _clearSynthesizedSample();
+          if(_sourceSample.data.size() > 0)
           {
-            if(analyzeSample())
-            {
-              // on success, send Sumu Partials to View and Processor
-              SumuPartialsData* pPartials = _sumuPartials.get();
-              Value partialsPtrValue(&pPartials, sizeof(SumuPartialsData*));
-              sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
-              sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
-              
-              // on success, send Loris Partials to View and Processor
-              Loris::PartialList* pLorisPartials = _lorisPartials.get();
-              Value lorisPartialsPtrValue(&pLorisPartials, sizeof(Loris::PartialList*));
-              sendMessageToActor(_processorName, {"do/set_loris_partials_data", lorisPartialsPtrValue});
-              sendMessageToActor(_viewName, {"do/set_loris_partials_data", lorisPartialsPtrValue});
-            }
+            analyzeSample();
           }
-          
+          broadcastPartialsData();
+          broadcastSynthesizedSample();
+          setButtonEnableStates();
           messageHandled = true;
           break;
         }
         case(hash("synthesize")):
         {
+          _clearSynthesizedSample();
           Loris::PartialList* pLorisPartials = _lorisPartials.get();
           if(pLorisPartials)
           if(pLorisPartials->size() > 0)
           {
             synthesize();
-            
-            // send synthesized audio to View and Processor
-            sumu::Sample* pSample = &_synthesizedSample;
-            Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
-            sendMessageToActor(_processorName, {"do/set_synth_data", samplePtrValue});
-            sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
-            
-            sendMessageToActor(_viewName, {"widget/play_synth/set_prop/enabled", true});
           }
-          
+
+          broadcastSynthesizedSample();
+          setButtonEnableStates();
           messageHandled = true;
           break;
         }

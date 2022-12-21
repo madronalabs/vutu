@@ -30,61 +30,42 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 {
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
-    { "range", { 4, 400 } },
+    { "range", { 4, 100 } },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "window_width" },
-    { "range", {128, 2048} },
+    { "range", {32, 512} },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "amp_floor" },
-    { "range", {-60, -10} },
-    { "plaindefault", -45 },
+    { "range", {-80, -30} },
+    { "plaindefault", -60 },
     { "units", "dB" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "freq_drift" },
-    { "range", {3, 300} },
+    { "range", {5, 100} },
+    { "plaindefault", 10 },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "master_volume" },
-    { "range", {-60, 6} },
+    { "range", {-60, 0} },
     { "log", false },
-    { "plaindefault", -15 },
+    { "plaindefault", -6 },
     { "units", "dB" }
   } ) );
 }
 
-
-void normalize(Sample* pSrc)
-{
-  if(!pSrc) return;
-  
-  // get max
-  float xMax{0.f};
-  for(int i=0; i<pSrc->data.size(); ++i)
-  {
-    float x = pSrc->data[i];
-    xMax = std::max(xMax, x);
-  }
-  
-  // multiply
-  float ratio = 1.0f / xMax;
-  for(int i=0; i<pSrc->data.size(); ++i)
-  {
-    pSrc->data[i] *= ratio;
-  }
-}
 
 void resample(const Sample* pSrc, Sample* pDest)
   {
@@ -170,8 +151,8 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   }
   if(test)
   {
-    std::cout << "playbackState: " << playbackState << "\n";
-    std::cout << "playbackSampleIdx: " << playbackSampleIdx << "\n";
+    //std::cout << "playbackState: " << playbackState << "\n";
+    //std::cout << "playbackSampleIdx: " << playbackSampleIdx << "\n";
   }
   
   // get params from the SignalProcessor.
@@ -273,7 +254,7 @@ void VutuProcessor::onMessage(Message msg)
     {
       switch(hash(second(msg.address)))
       {
-        case(hash("set_audio_data")):
+        case(hash("set_source_data")):
         {
           playbackState = "off";
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
@@ -289,7 +270,7 @@ void VutuProcessor::onMessage(Message msg)
           _sourceSample.sampleRate = currentSampleRate;
           
           // TODO normalize there
-          normalize(_pSourceSampleInController);
+          // normalize(_pSourceSampleInController);
           resample(_pSourceSampleInController, &_sourceSample);
           break;
         }

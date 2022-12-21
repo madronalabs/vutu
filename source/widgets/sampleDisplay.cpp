@@ -79,9 +79,7 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
   NativeDrawContext* nvg = getNativeContext(dc);
   const int gridSize = dc.coords.gridSizeInPixels;
 
-
   if(!_backingLayer) return;
-
   int w = _backingLayer->width;
   int h = _backingLayer->height;
    
@@ -97,48 +95,55 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
     nvgFill(nvg);
   }
 
-  if(!_pSample) return;
-  size_t frames = _pSample->data.size();
-
-  Interval xRange{0.f, w - 1.f};
-  Interval yRange{h - 1.f, 0.f};
-  float yCenter{(h - 1.f)/2.f};
-
-  constexpr float kMinLineLength{2.f};
-  auto xToTime = projections::linear({0.f, w - 1.f}, {0, frames - 1.f});
-  auto timeToX = projections::linear({0, frames - 1.f}, {0.f, w - 1.f});
-
-  Interval ampRange = {0.f, 1.f};
-
-  Interval thicknessRange{0, h/2.f};
-  auto ampToThickness = projections::linear(ampRange, thicknessRange);
+  bool sampleOK = _pSample && _pSample->data.size();
   
-  auto color = getColor(dc, "partials");
-  
-  // time the partials bit
-  auto roughStart = high_resolution_clock::now();
-  size_t totalFramesRead{0};
-  size_t totalFramesDrawn{0};
-
-  nvgStrokeColor(nvg, color);
-  nvgStrokeWidth(nvg, 1.0f);
-  nvgBeginPath(nvg);
-
-  // TEMP no smoothing
-  for(int x=0; x<w; ++x)
+  if(sampleOK)
   {
-    int frame = clamp(size_t(xToTime(x)), 0UL, frames);
-    float amp = _pSample->data[frame];
-    float thickness = ampToThickness(amp);
-    nvgMoveTo(nvg, x, yCenter - thickness);
-    nvgLineTo(nvg, x, yCenter + thickness);
+    
+    
+    size_t frames = _pSample->data.size();
+    
+    Interval xRange{0.f, w - 1.f};
+    Interval yRange{h - 1.f, 0.f};
+    float yCenter{(h - 1.f)/2.f};
+    
+    constexpr float kMinLineLength{2.f};
+    auto xToTime = projections::linear({0.f, w - 1.f}, {0, frames - 1.f});
+    auto timeToX = projections::linear({0, frames - 1.f}, {0.f, w - 1.f});
+    
+    Interval ampRange = {0.f, 1.f};
+    
+    Interval thicknessRange{0, h/2.f};
+    auto ampToThickness = projections::linear(ampRange, thicknessRange);
+    
+    auto color = getColor(dc, "partials");
+    
+    // time the partials bit
+    auto roughStart = high_resolution_clock::now();
+    size_t totalFramesRead{0};
+    size_t totalFramesDrawn{0};
+    
+    nvgStrokeColor(nvg, color);
+    nvgStrokeWidth(nvg, 1.0f);
+    nvgBeginPath(nvg);
+    
+    // TEMP no smoothing
+    for(int x=0; x<w; ++x)
+    {
+      int frame = clamp(size_t(xToTime(x)), 0UL, frames);
+      float amp = _pSample->data[frame];
+      float thickness = ampToThickness(amp);
+      nvgMoveTo(nvg, x, yCenter - thickness);
+      nvgLineTo(nvg, x, yCenter + thickness);
+    }
+    nvgStroke(nvg);
+    
+    auto roughEnd = high_resolution_clock::now();
+    auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
+    std::cout << " sample painting time rough millis: " << roughMillisTotal << "\n";
   }
-  nvgStroke(nvg);
   
-  auto roughEnd = high_resolution_clock::now();
-  auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
-  std::cout << " sample painting time rough millis: " << roughMillisTotal << "\n";
-
+  
   // end backing layer update
   nvgEndFrame(nvg);
 }

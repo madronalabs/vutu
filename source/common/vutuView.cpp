@@ -67,9 +67,9 @@ void VutuView::layoutView(DrawContext dc)
   _view->_widgets["freq_drift"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {6.5, dialsY2}));
 
   // right dials
-  _view->_widgets["volume"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {gx - 2.f, dialsY2}));
+  _view->_widgets["volume"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {gx - 2.f, bottomY + 3.5f}));
   
-  // labels
+  // dial labels
   auto positionLabelUnderDial = [&](Path dialName)
   {
     Path labelName (TextFragment(pathToText(dialName), "_label"));
@@ -82,29 +82,39 @@ void VutuView::layoutView(DrawContext dc)
     positionLabelUnderDial(dialName);
   }
   
+
+  
+  // info: whole width
+  _view->_widgets["info"]->setRectProperty("bounds", ml::Rect(0, bottomY, gx, 1));
+  
+  // audio display widgets
+  int bigWidth = gx;
+  _view->_widgets["source"]->setRectProperty("bounds", ml::Rect(0, 0, bigWidth, 2));
+  _view->_widgets["partials"]->setRectProperty("bounds", ml::Rect(0, 2, bigWidth, bottomY - 2));
+  _view->_widgets["synth"]->setRectProperty("bounds", ml::Rect(0, bottomY - 2, bigWidth, 2));
+
   // buttons
   int centerX = gx/2;
   float buttonWidth = 4;
   float halfButtonWidth = buttonWidth/2.f;
-  float buttonsY1 = bottomY + 1.5;
-  float buttonsY2 = bottomY + 2.5;
-  float buttonsY3 = bottomY + 3.5;
-  ml::Rect textButtonRect(0, 0, buttonWidth, 1);
-  
-  _view->_widgets["open"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + halfButtonWidth, buttonsY1}));
-  _view->_widgets["play_source"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY1}));
-  _view->_widgets["play_synth"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth*2 + halfButtonWidth, buttonsY1}));
-  _view->_widgets["analyze"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth, buttonsY2}));
-  _view->_widgets["synthesize"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth + halfButtonWidth, buttonsY3}));
-  _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {centerX + buttonWidth*2 + halfButtonWidth, buttonsY3}));
-  _view->_widgets["info"]->setRectProperty("bounds", ml::Rect(0, bottomY, gx, 1));
-  
-  // big ones
-  _view->_widgets["source"]->setRectProperty("bounds", ml::Rect(0, 0, gx, 2));
-  _view->_widgets["partials"]->setRectProperty("bounds", ml::Rect(0, 2, gx, bottomY - 2));
-  _view->_widgets["synth"]->setRectProperty("bounds", ml::Rect(0, bottomY - 2, gx, 2));
 
-  // resize widgets
+  ml::Rect textButtonRect(0, 0, buttonWidth, 1);
+
+  float buttonsY1 = bottomY + 2.5;
+  float buttonsY2 = bottomY + 4.0;
+  float buttonsY3 = bottomY + 5.5;
+  
+  float buttonsR = gx - 4 - halfButtonWidth;
+  _view->_widgets["open"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsR - buttonWidth*2, buttonsY1}));
+  _view->_widgets["analyze"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsR - buttonWidth*1, buttonsY1}));
+  _view->_widgets["play_source"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsR - buttonWidth*0, buttonsY1}));
+    
+  _view->_widgets["synthesize"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsR - buttonWidth*1, buttonsY2}));
+  _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsR - buttonWidth*0, buttonsY2}));
+
+  _view->_widgets["play_synth"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsR - buttonWidth*0, buttonsY3}));
+  
+  // resize all widgets
   forEach< Widget >
   (_view->_widgets, [&](Widget& w)
    {
@@ -196,7 +206,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     {"action", "analyze" }
   } );
   _view->_widgets.add_unique< TextButtonBasic >("play_source", WithValues{
-    {"text", "s" },
+    {"text", "play" },
     {"action", "toggle_play_source" }
   } );
   _view->_widgets.add_unique< TextButtonBasic >("synthesize", WithValues{
@@ -243,8 +253,10 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   }
    );
   
-  // play button disabled until we have a sample
+  // play buttons disabled until we have a sample
   _view->_widgets["play_source"]->setProperty("enabled", false);
+  _view->_widgets["analyze"]->setProperty("enabled", false);
+  _view->_widgets["export"]->setProperty("enabled", false);
   _view->_widgets["play_synth"]->setProperty("enabled", false);
 
   _setupWidgets(pdl);
@@ -304,7 +316,7 @@ void VutuView::onMessage(Message msg)
     {
       switch(hash(second(msg.address)))
       {
-        case(hash("set_audio_data")):
+        case(hash("set_source_data")):
         {
           // get Sample pointer
           Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());

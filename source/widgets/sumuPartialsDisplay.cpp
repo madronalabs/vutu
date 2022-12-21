@@ -67,23 +67,10 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
   NativeDrawContext* nvg = getNativeContext(dc);
   const int gridSize = dc.coords.gridSizeInPixels;
 
-  if(!_pPartials)
-  {
-    /*
-    Rect bounds = getLocalBounds(dc, *this);
-    nvgBeginPath(nvg);
-    nvgRect(nvg, bounds);
-    nvgFillColor(nvg, rgba(0, 0, 0, 1));
-    nvgFill(nvg);
-     */
-    return;
-  }
-  
   if(!_backingLayer) return;
-
   int w = _backingLayer->width;
   int h = _backingLayer->height;
-   
+  
   // begin rendering to backing layer
   drawToLayer(_backingLayer.get());
   nvgBeginFrame(nvg, w, h, 1.0f);
@@ -95,171 +82,174 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     nvgFillColor(nvg, rgba(0, 0, 0, 1));
     nvgFill(nvg);
   }
-
-  size_t nPartials = _pPartials->stats.nPartials;
-  std::cout << "painting " << nPartials << " partials... \n";
-
-  Interval xRange{0.f, w - 1.f};
-  Interval yRange{h - 1.f, 0.f};
-
-  constexpr float kMinLineLength{2.f};
-  Interval sampleTimeRange{0, _pPartials->stats.maxTimeInSeconds};
-  auto xToTime = projections::linear({0.f, w - 1.f}, sampleTimeRange );
-  auto timeToX = projections::linear(sampleTimeRange, {0.f, w - 1.f});
-  auto freqRange = _pPartials->stats.freqRange;
-  //auto freqToY = projections::intervalMap(freqRange, yRange, projections::unity);//exp(freqRange));
   
-  auto freqToY = projections::linear(freqRange, yRange);
-  
-  // drawn amplidutes range from -60dB to max in partials
-  auto ampRange = _pPartials->stats.ampRange;
-  ampRange.mX1 = dBToAmp(-60);
-  
-  Interval thicknessRange{0, h/16.f};
-  auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::unity);
-  // projections::printTable(ampToThickness, "ampToThickness", ampRange, 5);
-  auto bandwidthToUnity = projections::linear(_pPartials->stats.bandwidthRange, {0, 1});
-
-  auto noiseColor = rgba(1, 1, 1, 1);
-  auto sineColor = getColor(dc, "partials");
-  
-  // time the partials bit
-  auto roughStart = high_resolution_clock::now();
-  size_t totalFramesRead{0};
-  size_t totalFramesDrawn{0};
-
-  for(int p=0; p<nPartials; ++p)
+  bool partialsOK = _pPartials && _pPartials->stats.nPartials;
+  if(partialsOK)
   {
-    const auto& partial = _pPartials->partials[p];
-    size_t framesInPartial = partial.time.size();
+    size_t nPartials = _pPartials->stats.nPartials;
+    std::cout << "painting " << nPartials << " partials... \n";
     
-//    nvgStrokeColor(nvg, sineColor);// TODO make avg color for stroke?
-    nvgStrokeWidth(nvg, 3); // TEMP
-    nvgBeginPath(nvg);
+    Interval xRange{0.f, w - 1.f};
+    Interval yRange{h - 1.f, 0.f};
     
-    float x1 = 0.;
+    constexpr float kMinLineLength{2.f};
+    Interval sampleTimeRange{0, _pPartials->stats.maxTimeInSeconds};
+    auto xToTime = projections::linear({0.f, w - 1.f}, sampleTimeRange );
+    auto timeToX = projections::linear(sampleTimeRange, {0.f, w - 1.f});
+    auto freqRange = _pPartials->stats.freqRange;
+    //auto freqToY = projections::intervalMap(freqRange, yRange, projections::unity);//exp(freqRange));
     
-    for(int i = 0; i < framesInPartial; ++i)
-    {
-      auto frame = getPartialFrameByIndex(*_pPartials, p, i);
-
-      float x = timeToX(_pPartials->partials[p].time[i]);
-
-      totalFramesRead++;
-      
-      if(frame.amp > 0.f)
-      if((i == 0) || (x > x1 + kMinLineLength))
-      {
-        x1 = x;
-        totalFramesDrawn++;
-        
-        float thickness = ampToThickness(frame.amp);
-        float y = freqToY(frame.freq);
-        
-        float colorOpacity = 0.5f;
-        float maxOpacity = 0.75f;
-        float pathOpacity = 0.75f;
-        
-        // adding noise fades opacity up to 1
-        float bw = bandwidthToUnity(frame.bandwidth);
-        
-        // std::cout << "frame " << i << " bw " << bw << "\n";
-        
-        pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
-        
-        /*
-        // nanovg workaround
-        if(thickness < 1.f)
-        {
-          pathOpacity *= thickness;
-          thickness = 1.f;
-        }*/
-        
-        auto colorWithNoise = lerp(sineColor, noiseColor, bw);
-        auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
-        
-        float y1 = clamp(y - thickness/2.f, 0.f, float(h));
-        float y2 = clamp(y + thickness/2.f, 0.f, float(h));
-        
-        /*
-        if(i == 0)
-        {
-          nvgMoveTo(nvg, x, y);
-        }
-        else
-        {
-          nvgLineTo(nvg, x, y);
-        }
-        */
-        nvgStrokeColor(nvg, partialColor);
-        nvgBeginPath(nvg);
-
-        nvgMoveTo(nvg, x, y1);
-        nvgLineTo(nvg, x, y2);
-        nvgStroke(nvg);
-      }
-    }
+    auto freqToY = projections::linear(freqRange, yRange);
     
+    // drawn amplidutes range from -60dB to max in partials
+    auto ampRange = _pPartials->stats.ampRange;
+    ampRange.mX1 = dBToAmp(-60);
     
-    //nvgStrokeColor(nvg, sineColor);
-   // nvgStroke(nvg);
-  }
-
-  
-  auto roughEnd = high_resolution_clock::now();
-  auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
-  std::cout << " frames read: " << totalFramesRead << " frames drawn: " << totalFramesDrawn << ", painting time rough millis: " << roughMillisTotal << "\n";
-  
-
-  
-/*
-  for(int x=0; x<w; ++x)
-  {
-    float time = xToTime(x);
-    float dTime = xToTime(x + 1) - time;
+    Interval thicknessRange{0, h/16.f};
+    auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::unity);
+    // projections::printTable(ampToThickness, "ampToThickness", ampRange, 5);
+    auto bandwidthToUnity = projections::linear(_pPartials->stats.bandwidthRange, {0, 1});
+    
+    auto noiseColor = rgba(1, 1, 1, 1);
+    auto sineColor = getColor(dc, "partials");
+    
+    // time the partials bit
+    auto roughStart = high_resolution_clock::now();
+    size_t totalFramesRead{0};
+    size_t totalFramesDrawn{0};
     
     for(int p=0; p<nPartials; ++p)
     {
-      auto frame = getPartialFrameDownsampled(*_pPartials, p, time, dTime);
-      //    auto frame = getPartialFrame(*_pPartials, p, time);
+      const auto& partial = _pPartials->partials[p];
+      size_t framesInPartial = partial.time.size();
       
-      if(frame.amp > 0.f)
+      //    nvgStrokeColor(nvg, sineColor);// TODO make avg color for stroke?
+      nvgStrokeWidth(nvg, 3); // TEMP
+      nvgBeginPath(nvg);
+      
+      float x1 = 0.;
+      
+      for(int i = 0; i < framesInPartial; ++i)
       {
-        float thickness = ampToThickness(frame.amp);
-        float y = freqToY(frame.freq);
+        auto frame = getPartialFrameByIndex(*_pPartials, p, i);
         
-        float colorOpacity = 0.5f;
-        float maxOpacity = 0.75f;
-        float pathOpacity = 0.75f;
+        float x = timeToX(_pPartials->partials[p].time[i]);
         
-        // adding noise fades opacity up to 1
-        float bw = bandwidthToUnity(frame.bandwidth);
-        pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
+        totalFramesRead++;
         
-        // nanovg workaround
-        if(thickness < 1.f)
-        {
-          pathOpacity *= thickness;
-          thickness = 1.f;
-        }
-        
-        auto colorWithNoise = lerp(sineColor, noiseColor, bw);
-        auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
-        
-        float y1 = clamp(y - thickness/2.f, 0.f, float(h));
-        float y2 = clamp(y + thickness/2.f, 0.f, float(h));
-        
-        nvgBeginPath(nvg);
-        nvgMoveTo(nvg, x, y1);
-        nvgLineTo(nvg, x, y2);
-        
-        nvgStrokeColor(nvg, partialColor);//
-        //nvgStrokeColor(nvg, sineColor);
-        nvgStroke(nvg);
+        if(frame.amp > 0.f)
+          if((i == 0) || (x > x1 + kMinLineLength))
+          {
+            x1 = x;
+            totalFramesDrawn++;
+            
+            float thickness = ampToThickness(frame.amp);
+            float y = freqToY(frame.freq);
+            
+            float colorOpacity = 0.5f;
+            float maxOpacity = 0.75f;
+            float pathOpacity = 0.75f;
+            
+            // adding noise fades opacity up to 1
+            float bw = bandwidthToUnity(frame.bandwidth);
+            
+            // std::cout << "frame " << i << " bw " << bw << "\n";
+            
+            pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
+            
+            
+            if(thickness < 1.f)
+            {
+              //pathOpacity *= thickness;
+              thickness = 1.f;
+            }
+            
+            auto colorWithNoise = lerp(sineColor, noiseColor, bw);
+            auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
+            
+            float y1 = clamp(y - thickness/2.f, 0.f, float(h));
+            float y2 = clamp(y + thickness/2.f, 0.f, float(h));
+            
+            /*
+             if(i == 0)
+             {
+             nvgMoveTo(nvg, x, y);
+             }
+             else
+             {
+             nvgLineTo(nvg, x, y);
+             }
+             */
+            nvgStrokeColor(nvg, partialColor);
+            nvgBeginPath(nvg);
+            
+            nvgMoveTo(nvg, x, y1);
+            nvgLineTo(nvg, x, y2);
+            nvgStroke(nvg);
+          }
       }
+      
+      
+      //nvgStrokeColor(nvg, sineColor);
+      // nvgStroke(nvg);
     }
+    
+    
+    auto roughEnd = high_resolution_clock::now();
+    auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
+    std::cout << " frames read: " << totalFramesRead << " frames drawn: " << totalFramesDrawn << ", painting time rough millis: " << roughMillisTotal << "\n";
+    
+    
+    
+    /*
+     for(int x=0; x<w; ++x)
+     {
+     float time = xToTime(x);
+     float dTime = xToTime(x + 1) - time;
+     
+     for(int p=0; p<nPartials; ++p)
+     {
+     auto frame = getPartialFrameDownsampled(*_pPartials, p, time, dTime);
+     //    auto frame = getPartialFrame(*_pPartials, p, time);
+     
+     if(frame.amp > 0.f)
+     {
+     float thickness = ampToThickness(frame.amp);
+     float y = freqToY(frame.freq);
+     
+     float colorOpacity = 0.5f;
+     float maxOpacity = 0.75f;
+     float pathOpacity = 0.75f;
+     
+     // adding noise fades opacity up to 1
+     float bw = bandwidthToUnity(frame.bandwidth);
+     pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
+     
+     // nanovg workaround
+     if(thickness < 1.f)
+     {
+     pathOpacity *= thickness;
+     thickness = 1.f;
+     }
+     
+     auto colorWithNoise = lerp(sineColor, noiseColor, bw);
+     auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
+     
+     float y1 = clamp(y - thickness/2.f, 0.f, float(h));
+     float y2 = clamp(y + thickness/2.f, 0.f, float(h));
+     
+     nvgBeginPath(nvg);
+     nvgMoveTo(nvg, x, y1);
+     nvgLineTo(nvg, x, y2);
+     
+     nvgStrokeColor(nvg, partialColor);//
+     //nvgStrokeColor(nvg, sineColor);
+     nvgStroke(nvg);
+     }
+     }
+     }
+     */
   }
-  */
   
   // end backing layer update
   nvgEndFrame(nvg);

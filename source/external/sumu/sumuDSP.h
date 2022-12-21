@@ -12,7 +12,34 @@ struct Sample
 {
   std::vector< float > data;
   size_t sampleRate{0};
+  
+  void normalize()
+  {
+    // get ratio
+    float xMax{0.f};
+    for(int i=0; i<data.size(); ++i)
+    {
+      float x = data[i];
+      xMax = std::max(xMax, x);
+    }
+    
+    // multiply
+    float ratio = 1.0f / xMax;
+    for(int i=0; i<data.size(); ++i)
+    {
+      data[i] *= ratio;
+    }
+  }
+  
+  void clear()
+  {
+    data.clear();
+  }
+
+  
 };
+
+
 
 
 };

@@ -40,19 +40,32 @@ public:
   // update the named collection of files and return a pointer to it.
   FileTree* updateCollection(Path which);
 
+  // enable / disable the right buttons on the View
+  void setButtonEnableStates();
+  
+
   
 private:
   
-  sumu::Sample _sample;
+  sumu::Sample _sourceSample;
+  sumu::Sample _synthesizedSample;
+
   std::unique_ptr< Loris::PartialList > _lorisPartials;
   std::unique_ptr< SumuPartialsData > _sumuPartials;
 
-  sumu::Sample _synthesizedSample;
   
-  void _clearPartialsData();
+  void clearSourceSample();
   int _loadSampleFromDialog();
   int analyzeSample();
+  void broadcastSourceSample();
+
+  void _clearPartialsData();
+  void broadcastPartialsData();
+
   void synthesize();
+
+  void _clearSynthesizedSample();
+  void broadcastSynthesizedSample();
   
   // the state to which we can revert, stored as normalized values.
   Tree< Value > _revertState;
