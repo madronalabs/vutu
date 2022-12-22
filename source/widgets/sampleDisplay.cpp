@@ -77,7 +77,7 @@ void SampleDisplay::receiveNamedRawPointer(Path name, void* ptr)
 void SampleDisplay::paintSample(ml::DrawContext dc)
 {
   NativeDrawContext* nvg = getNativeContext(dc);
-  const int gridSize = dc.coords.gridSizeInPixels;
+  const int gridSizeInPixels = dc.coords.gridSizeInPixels;
 
   if(!_backingLayer) return;
   int w = _backingLayer->width;
@@ -87,6 +87,8 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
   drawToLayer(_backingLayer.get());
   nvgBeginFrame(nvg, w, h, 1.0f);
   
+  auto color = getColor(dc, "partials");
+
   // draw opaque black bg
   {
     nvgBeginPath(nvg);
@@ -94,13 +96,12 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
     nvgFillColor(nvg, rgba(0, 0, 0, 1));
     nvgFill(nvg);
   }
-
+  
+  
   bool sampleOK = _pSample && _pSample->data.size();
   
   if(sampleOK)
   {
-    
-    
     size_t frames = _pSample->data.size();
     
     Interval xRange{0.f, w - 1.f};
@@ -116,7 +117,6 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
     Interval thicknessRange{0, h/2.f};
     auto ampToThickness = projections::linear(ampRange, thicknessRange);
     
-    auto color = getColor(dc, "partials");
     
     // time the partials bit
     auto roughStart = high_resolution_clock::now();
@@ -155,54 +155,72 @@ void SampleDisplay::draw(ml::DrawContext dc)
   Rect bounds = getLocalBounds(dc, *this);
   int w = bounds.width();
   int h = bounds.height();
-  const int gridSize = dc.coords.gridSizeInPixels;
-  int margin = gridSize/64.f;
-  float strokeWidth = gridSize/32.f;
+  const int gridSizeInPixels = dc.coords.gridSizeInPixels;
+  
+  int margin = gridSizeInPixels/8.f;
+  Rect marginBounds = shrink(bounds, margin);
+
+  float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", getFloat(dc, "common_stroke_width"));
+  float strokeWidth = gridSizeInPixels*strokeWidthMul;
   
   auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
   auto markColor = getColor(dc, "partials");
 
+
   // paint background
   {
     nvgBeginPath(nvg);
-    nvgRect(nvg, 0, 0, w, h);
+    nvgRect(nvg, marginBounds);
     nvgFillColor(nvg, bgColor);
     nvgFill(nvg);
   }
   
-  if(!_pSample) return;
   if(!_backingLayer) return;
-
-  auto nativeImage = getNativeImageHandle(*_backingLayer);
   
-  // make an image pattern. The entire source image maps to the specified rect of the destination.
-  NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
-
+  bool sampleOK = _pSample && _pSample->data.size();
+  
+  if(sampleOK)
   {
-    nvgSave(nvg);
-    nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
+    auto nativeImage = getNativeImageHandle(*_backingLayer);
     
-    // paint image lighten over bg
-    nvgBeginPath(nvg);
-    nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
-    nvgFillPaint(nvg, img);
-    nvgFill(nvg);
+    // make an image pattern. The entire source image maps to the specified rect of the destination.
+    NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
     
-    nvgRestore(nvg);
+    // draw image
+    {
+      nvgSave(nvg);
+      nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
+      
+      // paint image lighten over bg
+      nvgBeginPath(nvg);
+      nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
+      nvgFillPaint(nvg, img);
+      nvgFill(nvg);
+      
+      nvgRestore(nvg);
+    }
+    
+    // draw progress
+    if(_progress > 0.f)
+    {
+      Interval xRange{marginBounds.left(), marginBounds.right()};
+      auto xToProgress = projections::linear({0.f, 1.f}, xRange);
+      
+      float px = xToProgress(_progress);
+      nvgStrokeWidth(nvg, strokeWidth);
+      nvgBeginPath(nvg);
+      nvgStrokeColor(nvg, markColor);
+      nvgMoveTo(nvg, px, marginBounds.top());
+      nvgLineTo(nvg, px, marginBounds.bottom());
+      nvgStroke(nvg);
+    }
   }
   
-  // draw progress
-  {
-    Interval xRange{0.f, w - 1.f};
-    auto xToProgress = projections::linear({0.f, 1.f}, xRange);
-
-    float px = xToProgress(_progress);
-    nvgStrokeWidth(nvg, strokeWidth);
-    nvgBeginPath(nvg);
-    nvgStrokeColor(nvg, markColor);
-    nvgMoveTo(nvg, px, 0);
-    nvgLineTo(nvg, px, h);
-    nvgStroke(nvg);
-    
-  }
+  // draw border
+  nvgBeginPath(nvg);
+  nvgRoundedRect(nvg, marginBounds, strokeWidth*2);
+  nvgStrokeWidth(nvg, strokeWidth);
+  nvgStrokeColor(nvg, markColor);
+  nvgStroke(nvg);
+  
 }

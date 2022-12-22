@@ -262,52 +262,64 @@ void SumuPartialsDisplay::draw(ml::DrawContext dc)
   Rect bounds = getLocalBounds(dc, *this);
   int w = bounds.width();
   int h = bounds.height();
-  const int gridSize = dc.coords.gridSizeInPixels;
+  const int gridSizeInPixels = dc.coords.gridSizeInPixels;
+  float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", getFloat(dc, "common_stroke_width"));
+  float strokeWidth = gridSizeInPixels*strokeWidthMul;
+
+  int margin = gridSizeInPixels/8;
+  Rect marginBounds = shrink(bounds, margin);
   
   auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
-  
-  if(!_pPartials)
+  auto markColor = getColor(dc, "partials");
+
+  // background
   {
+    nvgBeginPath(nvg);
+    nvgRect(nvg, marginBounds);
+    nvgFillColor(nvg, bgColor);
+    nvgFill(nvg);
+  }
+  
+  if(!_backingLayer) return;
+ 
+  bool partialsOK = _pPartials && _pPartials->stats.nPartials;
+  if(partialsOK)
+  {
+    Rect pBounds = getPixelBounds(dc, *this);
+    int pw = pBounds.width();
+    int ph = pBounds.height();
+    
+    int bw = _backingLayer->width;
+    int bh = _backingLayer->height;
+    
+    // blit backing layer to main layer
+    auto nativeImage = getNativeImageHandle(*_backingLayer);
+    
+    // paint background color
     nvgBeginPath(nvg);
     nvgRect(nvg, 0, 0, w, h);
     nvgFillColor(nvg, bgColor);
     nvgFill(nvg);
-    return;
+    
+    
+    // make an image pattern. The entire source image maps to the specified rect of the destination.
+    NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
+    
+    // paint image lighten over bg
+    nvgSave(nvg);
+    nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
+    nvgBeginPath(nvg);
+    nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
+    nvgFillPaint(nvg, img);
+    nvgFill(nvg);
+    nvgRestore(nvg);
   }
-  if(!_backingLayer) return;
- 
   
-  Rect pBounds = getPixelBounds(dc, *this);
-  int pw = pBounds.width();
-  int ph = pBounds.height();
-  
-  int bw = _backingLayer->width;
-  int bh = _backingLayer->height;
-  
-  int margin = gridSize/64.f;
-  
-  // blit backing layer to main layer
-  auto nativeImage = getNativeImageHandle(*_backingLayer);
-  
-  // paint background color
+  // draw border
   nvgBeginPath(nvg);
-  nvgRect(nvg, 0, 0, w, h);
-  nvgFillColor(nvg, bgColor);
-  nvgFill(nvg);
-  
-  
-  // make an image pattern. The entire source image maps to the specified rect of the destination.
-  NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
-
-  nvgSave(nvg);
-  nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
-  
-  // paint image lighten over bg
-  nvgBeginPath(nvg);
-  nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
-  nvgFillPaint(nvg, img);
-  nvgFill(nvg);
-  
-  nvgRestore(nvg);
+  nvgRoundedRect(nvg, marginBounds, strokeWidth*2);
+  nvgStrokeWidth(nvg, strokeWidth);
+  nvgStrokeColor(nvg, markColor);
+  nvgStroke(nvg);
  
 }

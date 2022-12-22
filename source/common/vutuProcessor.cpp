@@ -30,29 +30,31 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 {
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
-    { "range", { 4, 100 } },
+    { "range", { 8, 256 } },
+    { "plaindefault", 128 },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "window_width" },
-    { "range", {32, 512} },
+    { "range", {16, 768} },
+    { "plaindefault", 256 },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "amp_floor" },
-    { "range", {-80, -30} },
+    { "range", {-80, -20} },
     { "plaindefault", -60 },
     { "units", "dB" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "freq_drift" },
-    { "range", {5, 100} },
-    { "plaindefault", 10 },
+    { "range", {10, 100} },
+    { "plaindefault", 30 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -206,7 +208,8 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
 // toggle current playback state and tell controller
 void VutuProcessor::togglePlaybackState(Symbol whichSample)
 {
-  // if either sample is playing, stop
+  // if either sample is playing, stop both
+  auto prevState = playbackState;
   if(playbackState != "off")
   {
     playbackState = "off";
@@ -215,22 +218,29 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
     sendMessageToActor(_controllerName, Message{"set_prop/source_progress", 0});
     sendMessageToActor(_controllerName, Message{"set_prop/synth_progress", 0});
   }
-  else if(whichSample == "source")
+  
+  if(whichSample == "source")
   {
-    if(_sourceSample.data.size() > 0)
+    if(prevState != "source")
     {
-      playbackState = "source";
-      playbackSampleIdx = 0;
-      sendMessageToActor(_controllerName, Message{"do/playback_started/source"});
+      if(_sourceSample.data.size() > 0)
+      {
+        playbackState = "source";
+        playbackSampleIdx = 0;
+        sendMessageToActor(_controllerName, Message{"do/playback_started/source"});
+      }
     }
   }
   else if(whichSample == "synth")
   {
-    if(_pSynthesizedSample && _pSynthesizedSample->data.size() > 0)
+    if(prevState != "synth")
     {
-      playbackState = "synth";
-      playbackSampleIdx = 0;
-      sendMessageToActor(_controllerName, Message{"do/playback_started/synth"});
+      if(_pSynthesizedSample && _pSynthesizedSample->data.size() > 0)
+      {
+        playbackState = "synth";
+        playbackSampleIdx = 0;
+        sendMessageToActor(_controllerName, Message{"do/playback_started/synth"});
+      }
     }
   }
 }

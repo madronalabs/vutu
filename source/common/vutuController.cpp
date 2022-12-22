@@ -363,11 +363,12 @@ void VutuController::onMessage(Message m)
       {
         case(hash("open")):
         {
-          clearSourceSample();
-          _clearPartialsData();
-          _clearSynthesizedSample();
           
-          _loadSampleFromDialog();
+          if(_loadSampleFromDialog())
+          {
+            _clearPartialsData();
+            _clearSynthesizedSample();
+          }
 
           broadcastSourceSample();
           broadcastPartialsData();
