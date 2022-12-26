@@ -264,7 +264,7 @@ void SumuPartialsDisplay::draw(ml::DrawContext dc)
   int h = bounds.height();
   const int gridSizeInPixels = dc.coords.gridSizeInPixels;
   float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", getFloat(dc, "common_stroke_width"));
-  float strokeWidth = gridSizeInPixels*strokeWidthMul;
+  int strokeWidth = gridSizeInPixels*strokeWidthMul;
 
   int margin = gridSizeInPixels/8;
   Rect marginBounds = shrink(bounds, margin);

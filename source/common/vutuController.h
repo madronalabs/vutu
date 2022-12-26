@@ -53,7 +53,14 @@ private:
   std::unique_ptr< Loris::PartialList > _lorisPartials;
   std::unique_ptr< SumuPartialsData > _sumuPartials;
 
-  
+  Path showLoadDialog(Symbol fileType);
+
+  Path showSaveDialog();
+  int loadSampleFromPath(Path samplePath);
+  int loadPartialsFromPath(Path samplePath);
+
+  void saveTextToPath(const TextFragment& text, Path savePath);
+
   void clearSourceSample();
   int _loadSampleFromDialog();
   int analyzeSample();

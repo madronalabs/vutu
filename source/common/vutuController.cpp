@@ -29,10 +29,10 @@ using namespace ml;
 using namespace sumu;
 
 
-void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pSumu, float maxTimeInSeconds)
+void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pSumu)
 {
   for (const auto& partial : *pLoris) {
-
+    
     SumuPartial sp;
     for (auto it = partial.begin(); it != partial.end(); it++) {
       sp.time.push_back(it.time());
@@ -46,9 +46,35 @@ void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pS
     
   }
   
+  pSumu->type = Symbol(kSumuPartialsFileType);
+  pSumu->version = kSumuPartialsFileVersion;
+  
   std::cout << "_lorisToSumuPartials: " << pSumu->partials.size() << " partials. \n ";
   
-  pSumu->calcStats(maxTimeInSeconds);// = getPartialsStats(*_partialsData);
+  pSumu->calcStats();
+}
+
+
+void _sumuToLorisPartials(const SumuPartialsData* pSumu, Loris::PartialList* pLoris)
+{
+
+    
+  for (auto it = pSumu->partials.begin(); it != pSumu->partials.end(); it++) {
+    const SumuPartial& sp = *it;
+    Loris::Partial lp;
+
+    size_t nBreakpoints = sp.time.size();
+    for(int i=0; i<nBreakpoints; ++i)
+    {
+      Loris::Breakpoint b(sp.freq[i], sp.amp[i], sp.bandwidth[i], sp.phase[i]);
+      lp.insert(sp.time[i], b);
+    }
+    pLoris->push_back(lp);
+    
+    
+  }
+  
+  std::cout << "_sumuToLorisPartials: " << pSumu->partials.size() << " partials. \n ";
 
 }
 
@@ -141,19 +167,131 @@ void VutuController::broadcastSynthesizedSample()
   sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
 }
 
-int VutuController::_loadSampleFromDialog()
+int VutuController::loadSampleFromPath(Path samplePath)
 {
   int OK{ false };
+  File fileToLoad(samplePath);
+  if(fileToLoad)
+  {
+    std::cout << "file to load: " << samplePath << "\n";
+    std::cout << "init sr: " << _sourceSample.sampleRate << "\n";
+    
+    // load the file
+    auto filePathText = fileToLoad.getFullPathAsText();
+    SF_INFO fileInfo{};
+    sf_count_t framesRead{0};
+    float* pData{nullptr};
+    auto file = sf_open(filePathText.getText(), SFM_READ, &fileInfo);
+    if(file)
+    {
+      constexpr size_t kMaxSeconds = 8;
+      size_t fileSizeInFrames = fileInfo.frames;
+      size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
+      
+      size_t framesToRead = std::min(fileSizeInFrames, kMaxFrames);
+      size_t samplesToRead = framesToRead*fileInfo.channels;
+      
+      _printToConsole(TextFragment("loading ", filePathText, "..."));
+      
+      _sourceSample.data.resize(samplesToRead);
+      pData = _sourceSample.data.data();
+      _sourceSample.sampleRate = fileInfo.samplerate;
+      
+      framesRead = sf_readf_float(file, pData, static_cast<sf_count_t>(framesToRead));
+      
+      TextFragment readStatus;
+      if(framesRead != framesToRead)
+      {
+        readStatus = "file read failed!";
+      }
+      else
+      {
+        TextFragment truncatedMsg = (framesToRead == kMaxFrames) ? "(truncated)" : "";
+        readStatus = (TextFragment(textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg ));
+        OK = true;
+      }
+      
+      _printToConsole(readStatus);
+      sf_close(file);
+    }
+    
+    // deinterleave to extract first channel if needed
+    if(pData && fileInfo.channels > 1)
+    {
+      for(int i=0; i < framesRead; ++i)
+      {
+        pData[i] = pData[i*fileInfo.channels];
+      }
+      _sourceSample.data.resize(framesRead);
+    }
+    
+    _sourceSample.normalize();
+  }
+  return OK;
+}
+
+int VutuController::loadPartialsFromPath(Path partialsPath)
+{
+  int OK{ false };
+  File fileToLoad(partialsPath);
+  if(fileToLoad)
+  {
+    TextFragment partialsText;
+    fileToLoad.loadAsText(partialsText);
+    
+    // to implement!
+    auto partialsJSON = textToJSON(partialsText);
+    if(SumuPartialsData* newPartials = jsonToSumuPartials(partialsJSON))
+    {
+      // transfer ownership of new partials to _sumuPartials and delete previous
+      _sumuPartials = std::unique_ptr<SumuPartialsData>(newPartials);
+      OK = true;
+    }
+    
+    //std::cout << "text: " << partialsText << "\n";
+    
+  }
+  
+  return OK;
+}
+
+
+Path VutuController::showLoadDialog(Symbol fileType)
+{
+  Path returnVal{};
   nfdchar_t *outPath;
   std::string sourcePath;
-  nfdfilteritem_t filterItem[2] = { { "WAV audio", "wav" }, { "AIFF audio", "aiff,aif,aifc" } };
-  nfdresult_t result = NFD_OpenDialog(&outPath, filterItem, 2, NULL);
+  
+  nfdresult_t result;
+  File defaultLocation;
+  switch(hash(fileType))
+  {
+    case(hash("samples")):
+    {
+      defaultLocation = (getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
+      auto defaultPathText = defaultLocation.getFullPathAsText();
+
+      nfdfilteritem_t filterItem[2] = { { "WAV audio", "wav" }, { "AIFF audio", "aiff,aif,aifc" } };
+      result = NFD_OpenDialog(&outPath, filterItem, 2, defaultPathText.getText());
+      break;
+    }
+    case(hash("partials")):
+    {
+      defaultLocation = (getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
+      auto defaultPathText = defaultLocation.getFullPathAsText();
+
+      nfdfilteritem_t filterItem[1] = { { "JSON data", "json" } }; // can add compressed JSON here
+      result = NFD_OpenDialog(&outPath, filterItem, 1, defaultPathText.getText());
+      break;
+    }
+  }
+  
   if (result == NFD_OKAY)
   {
     puts("Success!");
     puts(outPath);
     
-    sourcePath = outPath;
+    returnVal = Path(outPath);
     NFD_FreePath(outPath);
   }
   else if (result == NFD_CANCEL)
@@ -165,71 +303,87 @@ int VutuController::_loadSampleFromDialog()
     printf("Error: %s\n", NFD_GetError());
   }
   
-  Path filePath(sourcePath.c_str());
-  File f(filePath);
-  if(f)
+  return returnVal;
+}
+
+Path VutuController::showSaveDialog()
+{
+  Path returnVal{};
+  File partialsRoot(getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
+  
+  std::cout << "partials dir: " << partialsRoot.getFullPathAsText() << "\n";
+  
+  if(!partialsRoot.exists())
   {
-    std::cout << "file to load: " << filePath << "\n";
-    std::cout << "init sr: " << _sourceSample.sampleRate << "\n";
-
-    // load the file
-
-    SF_INFO fileInfo;
-    
-    auto file = sf_open(sourcePath.c_str(), SFM_READ, &fileInfo);
-    
-    std::cout << "        format: " << fileInfo.format << "\n";
-    std::cout << "        frames: " << fileInfo.frames << "\n";
-    std::cout << "        samplerate: " << fileInfo.samplerate << "\n";
-    std::cout << "        channels: " << fileInfo.channels << "\n";
-    
-    constexpr size_t kMaxSeconds = 8;
-    size_t fileSizeInFrames = fileInfo.frames;
-    size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
-
-    size_t framesToRead = std::min(fileSizeInFrames, kMaxFrames);
-    size_t samplesToRead = framesToRead*fileInfo.channels;
-    
-    _printToConsole(TextFragment("loading ", pathToText(filePath), "..."));
-    
-    _sourceSample.data.resize(samplesToRead);
-    float* pData = _sourceSample.data.data();
-    _sourceSample.sampleRate = fileInfo.samplerate;
-    
-    sf_count_t framesRead = sf_readf_float(file, pData, static_cast<sf_count_t>(framesToRead));
-    
-    TextFragment readStatus;
-    if(framesRead != framesToRead)
+    // make directory
+    Symbol r = partialsRoot.createDirectory();
+    if(r != "OK")
     {
-      readStatus = "file read failed!";
+      // TODO present error
+      std::cout << "create directory failed: " << r << "\n";
+    }
+  }
+  
+  if(partialsRoot.exists())
+  {
+    auto partialsRootText = partialsRoot.getFullPathAsText();
+    
+    nfdchar_t* savePathAsString;
+    Path savePath;
+    
+    Path currentPath = "default";//textToPath(_params["current_patch"].getTextValue());
+    Symbol currentName = last(currentPath);
+    TextFragment defaultName (currentName.getTextFragment(), ".json");
+    
+    // prepare filters for the dialog
+    const int nFilters = 1;
+    nfdfilteritem_t filterItem[nFilters] = {{"Sumu partials", "json"}};
+    
+    // show the dialog
+    nfdresult_t result = NFD_SaveDialog(&savePathAsString, filterItem, nFilters, partialsRootText.getText(), defaultName.getText());
+    if (result == NFD_OKAY)
+    {
+      puts(savePathAsString);
+      savePath = Path(savePathAsString);
+      NFD_FreePath(savePathAsString);
+      returnVal = savePath;
+    }
+    else if (result == NFD_CANCEL)
+    {
+      puts("User pressed cancel.");
     }
     else
     {
-      TextFragment truncatedMsg = (framesToRead == kMaxFrames) ? "(truncated)" : "";
-      readStatus = (TextFragment(textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg ));
-      OK = true;
+      printf("Error: %s\n", NFD_GetError());
     }
-    
-    _printToConsole(readStatus);
-    sf_close(file);
-        
-    // deinterleave to extract first channel if needed
-    if(fileInfo.channels > 1)
-    {
-      for(int i=0; i < framesRead; ++i)
-      {
-        pData[i] = pData[i*fileInfo.channels];
-      }
-      _sourceSample.data.resize(framesRead);
-
-    }
-
-    _sourceSample.normalize();
-
   }
-  return OK;
+  return returnVal;
 }
 
+void VutuController::saveTextToPath(const TextFragment& text, Path savePath)
+{
+  if(!savePath) return;
+  
+  File saveFile (savePath);
+  
+  if(saveFile.hasWriteAccess())
+  {
+    if(saveFile.replaceWithText(text))
+    {
+      std::cout << "saved text to " << savePath << "\n";
+    }
+    else
+    {
+      // TODO other save errors
+    }
+  }
+  else
+  {
+    std::cout << "save to file: no write access!\n";
+    // TODO
+  }
+  
+}
 
 int VutuController::analyzeSample()
 {
@@ -281,7 +435,7 @@ int VutuController::analyzeSample()
   {
     status = true;
     _sumuPartials = std::make_unique< SumuPartialsData >();
-    _lorisToSumuPartials(_lorisPartials.get(), _sumuPartials.get(), maxTimeInSeconds);
+    _lorisToSumuPartials(_lorisPartials.get(), _sumuPartials.get());
   }
 
   return status;
@@ -295,9 +449,6 @@ void VutuController::synthesize()
   params.sampleRate = kSampleRate;
   
   std::cout << "VutuController: synthesize: sr = " << params.sampleRate << "\n";
-  
-//  playbackState = "off";
-//  sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
   
   if(!_lorisPartials.get()) return;
   
@@ -316,8 +467,8 @@ void VutuController::synthesize()
   }
   
   _synthesizedSample.normalize();
-
 }
+
 
 
 void VutuController::onMessage(Message m)
@@ -363,13 +514,14 @@ void VutuController::onMessage(Message m)
       {
         case(hash("open")):
         {
-          
-          if(_loadSampleFromDialog())
+          if(auto pathToLoad = showLoadDialog("samples"))
           {
-            _clearPartialsData();
-            _clearSynthesizedSample();
+            if(loadSampleFromPath(pathToLoad))
+            {
+              _clearPartialsData();
+              _clearSynthesizedSample();
+            }
           }
-
           broadcastSourceSample();
           broadcastPartialsData();
           broadcastSynthesizedSample();
@@ -446,11 +598,49 @@ void VutuController::onMessage(Message m)
           messageHandled = true;
           break;
         }
+        case(hash("export")):
+        {
+          SumuPartialsData* pPartials = _sumuPartials.get();
+          bool partialsOK = pPartials && (pPartials->partials.size() > 0);
+          if(partialsOK)
+          {
+            if(auto savePath = showSaveDialog())
+            {
+              auto partialsJson = sumuPartialsToJSON(*pPartials);
+              auto partialsText = JSONToText(partialsJson);
+              File saveFile (savePath);
+              saveTextToPath(partialsText, savePath);
+            }
+          }
+          messageHandled = true;
+          break;
+        }
+        case(hash("import")):
+        {
+          if(auto pathToLoad = showLoadDialog("partials"))
+          {
+            // load Sumu partials from JSON
+            if(loadPartialsFromPath(pathToLoad))
+            {
+              // convert to Loris partials so we can use Loris to synthesize output
+              _lorisPartials = std::make_unique< Loris::PartialList >();
+              _sumuToLorisPartials(_sumuPartials.get(), _lorisPartials.get() );
+              
+              // clear synthesized sample and sync UI
+              _clearSynthesizedSample();
+              broadcastPartialsData();
+              broadcastSynthesizedSample();
+              setButtonEnableStates();
+            }
+          }
+          messageHandled = true;
+          break;
+        }
+          
         default:
         {
           break;
         }
-        
       }
       break;
     }

@@ -161,7 +161,7 @@ void SampleDisplay::draw(ml::DrawContext dc)
   Rect marginBounds = shrink(bounds, margin);
 
   float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", getFloat(dc, "common_stroke_width"));
-  float strokeWidth = gridSizeInPixels*strokeWidthMul;
+  int strokeWidth = gridSizeInPixels*strokeWidthMul;
   
   auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
   auto markColor = getColor(dc, "partials");

@@ -31,7 +31,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
     { "range", { 8, 256 } },
-    { "plaindefault", 128 },
+    { "plaindefault", 20 },
     { "log", true },
     { "units", "Hz" }
   } ) );

@@ -56,7 +56,7 @@ Interval getParamRangeInPartials(const SumuPartialsData& partialData, Symbol par
 // Get stats for partials data to aid synthesis and drawing.
 // TODO check that time is monotonically increasing
 //
-void SumuPartialsData::calcStats(float maxTimeInSeconds)
+void SumuPartialsData::calcStats()
 {
   stats.timeRange = getParamRangeInPartials(*this, "time");
   stats.ampRange = getParamRangeInPartials(*this, "amp");
@@ -93,8 +93,17 @@ void SumuPartialsData::calcStats(float maxTimeInSeconds)
     }
   }
   
+  // get max time for any partial
+  float maxTime{0};
+  for(int i=0; i<stats.nPartials; ++i)
+  {
+    float maxTimeInPartial = stats.partialTimeRanges[i].mX2;
+    maxTime = std::max(maxTime, maxTimeInPartial);
+  }
+  
   stats.maxFrames = maxFrames;
-  stats.maxTimeInSeconds = maxTimeInSeconds;
+  stats.maxTimeInSeconds = maxTime;
+
 }
 
 // get an interpolated frame of data from the partial index p of the SumuPartialsData at time t.
