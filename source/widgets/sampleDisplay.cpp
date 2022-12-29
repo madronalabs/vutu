@@ -40,11 +40,11 @@ MessageList SampleDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc)
     _dirty = true;
   }
   
-  float p = getFloatPropertyWithDefault("progress", 0);
+  float t = getFloatPropertyWithDefault("playback_time", 0.f);
   //std::cout << "progress: " << progress << "\n";
-  if(p != _progress)
+  if(t != _playbackTime)
   {
-    _progress = p;
+    _playbackTime = t;
     _dirty = true;
   }
   
@@ -103,14 +103,23 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
   if(sampleOK)
   {
     size_t frames = _pSample->data.size();
+    size_t sr = _pSample->sampleRate;
+
+    
+    float intervalStart = getFloatProperty("interval_start");
+    float intervalEnd = getFloatProperty("interval_end");
+    float frameStart = intervalStart*float(sr);
+    float frameEnd = intervalEnd*float(sr);
+    Interval frameInterval{frameStart, frameEnd};
+
     
     Interval xRange{0.f, w - 1.f};
     Interval yRange{h - 1.f, 0.f};
     float yCenter{(h - 1.f)/2.f};
     
     constexpr float kMinLineLength{2.f};
-    auto xToTime = projections::linear({0.f, w - 1.f}, {0, frames - 1.f});
-    auto timeToX = projections::linear({0, frames - 1.f}, {0.f, w - 1.f});
+    auto xToTime = projections::linear({0.f, w - 1.f}, frameInterval);
+    auto timeToX = projections::linear(frameInterval, {0.f, w - 1.f});
     
     Interval ampRange = {0.f, 1.f};
     
@@ -166,7 +175,6 @@ void SampleDisplay::draw(ml::DrawContext dc)
   auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
   auto markColor = getColor(dc, "partials");
 
-
   // paint background
   {
     nvgBeginPath(nvg);
@@ -181,6 +189,17 @@ void SampleDisplay::draw(ml::DrawContext dc)
   
   if(sampleOK)
   {
+    size_t frames = _pSample->data.size();
+    size_t sr = _pSample->sampleRate;
+    float intervalStart = getFloatProperty("interval_start");
+    float intervalEnd = getFloatProperty("interval_end");
+    float frameStart = intervalStart*float(sr);
+    float frameEnd = intervalEnd*float(sr);
+    Interval timeInterval{intervalStart, intervalEnd};
+    
+    Interval frameInterval{frameStart, frameEnd};
+    
+
     auto nativeImage = getNativeImageHandle(*_backingLayer);
     
     // make an image pattern. The entire source image maps to the specified rect of the destination.
@@ -201,12 +220,12 @@ void SampleDisplay::draw(ml::DrawContext dc)
     }
     
     // draw progress
-    if(_progress > 0.f)
+    if(_playbackTime > 0.f)
     {
       Interval xRange{marginBounds.left(), marginBounds.right()};
-      auto xToProgress = projections::linear({0.f, 1.f}, xRange);
+      auto timeToX = projections::linear(timeInterval, xRange);
       
-      float px = xToProgress(_progress);
+      float px = timeToX(_playbackTime);
       nvgStrokeWidth(nvg, strokeWidth);
       nvgBeginPath(nvg);
       nvgStrokeColor(nvg, markColor);
@@ -215,6 +234,9 @@ void SampleDisplay::draw(ml::DrawContext dc)
       nvgStroke(nvg);
     }
   }
+  
+  // TEST
+  // std::cout << "SampleDisplay start: " << getFloatProperty("interval_start") << " -- " <<  getFloatProperty("interval_end") << "\n";
   
   // draw border
   nvgBeginPath(nvg);

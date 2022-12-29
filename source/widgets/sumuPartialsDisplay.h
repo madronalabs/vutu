@@ -24,7 +24,14 @@ class SumuPartialsDisplay : public Widget
   
 
   ml::DrawContext _prevDC{nullptr};
+  
 public:
+  
+  virtual void handleMessage(Message msg, Message* r) override
+  {
+    std::cout << "partialsDisplay got message: " <<  msg << "\n";
+    Widget::handleMessage(msg, r);
+  }
   
   SumuPartialsDisplay(WithValues p) : Widget(p) {}
 

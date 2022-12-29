@@ -24,7 +24,7 @@ class SampleDisplay : public Widget
   const sumu::Sample * _pSample{nullptr};
   ml::DrawContext _prevDC{nullptr};
   
-  float _progress{0.f};
+  float _playbackTime{0};
   
 public:
   SampleDisplay(WithValues p) : Widget(p) {}

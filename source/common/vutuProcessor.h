@@ -53,6 +53,8 @@ private:
   size_t playbackSampleIdx{0};
   //size_t playbackCounter{0};
   
+  Interval analysisInterval{0, 0};
+  
   sumu::Sample* _pSourceSampleInController{nullptr};
   sumu::Sample _sourceSample;
   sumu::Sample* _pSynthesizedSample{nullptr};

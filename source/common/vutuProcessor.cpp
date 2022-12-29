@@ -30,7 +30,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 {
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
-    { "range", { 8, 256 } },
+    { "range", { 8, 512 } },
     { "plaindefault", 20 },
     { "log", true },
     { "units", "Hz" }
@@ -155,6 +155,7 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   {
     //std::cout << "playbackState: " << playbackState << "\n";
     //std::cout << "playbackSampleIdx: " << playbackSampleIdx << "\n";
+    //std::cout << "analysis interval: " << analysisInterval << "\n";
   }
   
   // get params from the SignalProcessor.
@@ -169,14 +170,14 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   if(playbackState == "source")
   {
     samplePlaying = &_sourceSample;
-    viewProperty = "source_progress";
+    viewProperty = "source_time";
   }
   else if(playbackState == "synth")
   {
     if(_pSynthesizedSample)
     {
       samplePlaying = _pSynthesizedSample;
-      viewProperty = "synth_progress";
+      viewProperty = "synth_time";
     }
   }
 
@@ -195,8 +196,9 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
       sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
     }
     
-    float progress = float(playbackSampleIdx) / float(samplePlaying->data.size());
-    sendMessageToActor(_controllerName, Message{Path{"set_prop", viewProperty}, progress});
+    float playbackTime = float(playbackSampleIdx) / float(sr);
+
+    sendMessageToActor(_controllerName, Message{Path{"set_prop", viewProperty}, playbackTime});
   }
   
   // Running the sine generators makes DSPVectors as output.
@@ -215,8 +217,8 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
     playbackState = "off";
     playbackSampleIdx = 0;
     sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
-    sendMessageToActor(_controllerName, Message{"set_prop/source_progress", 0});
-    sendMessageToActor(_controllerName, Message{"set_prop/synth_progress", 0});
+    sendMessageToActor(_controllerName, Message{"set_prop/source_time", 0});
+    sendMessageToActor(_controllerName, Message{"set_prop/synth_time", 0});
   }
   
   if(whichSample == "source")
@@ -311,14 +313,24 @@ void VutuProcessor::onMessage(Message msg)
           break;
         }
           
-
         case(hash("toggle_play")):
         {
           // play either source or synth
           togglePlaybackState(third(msg.address));
           break;
         }
-
+          
+        case(hash("set_interval_start")):
+        {
+          analysisInterval.mX1 = msg.value.getFloatValue();
+          break;
+        }
+          
+        case(hash("set_interval_end")):
+        {
+          analysisInterval.mX2 = msg.value.getFloatValue();
+          break;
+        }
 
       }
       break;

@@ -53,6 +53,12 @@ Interval getParamRangeInPartials(const SumuPartialsData& partialData, Symbol par
   return r;
 }
 
+struct IntervalEndpoint
+{
+  float time;
+  long isEnd;
+};
+
 // Get stats for partials data to aid synthesis and drawing.
 // TODO check that time is monotonically increasing
 //
@@ -63,20 +69,8 @@ void SumuPartialsData::calcStats()
   stats.bandwidthRange = getParamRangeInPartials(*this, "bandwidth");
   stats.freqRange = getParamRangeInPartials(*this, "freq");
   stats.nPartials = partials.size();
-  
-  // get max frames by looking at size of time data in all partials
-  size_t maxFrames = 0;
-  for(int i=0; i<stats.nPartials; ++i)
-  {
-    const SumuPartial& partial = partials[i];
-    size_t nFrames = partial.time.size();
-    if(nFrames > maxFrames)
-    {
-      maxFrames = nFrames;
-    }
-  }
-    
-  // get min, max time for each partial
+
+  // store min, max times for each partial
   stats.partialTimeRanges.clear();
   for(int i=0; i<stats.nPartials; ++i)
   {
@@ -93,18 +87,50 @@ void SumuPartialsData::calcStats()
     }
   }
   
-  // get max time for any partial
-  float maxTime{0};
-  for(int i=0; i<stats.nPartials; ++i)
+  // calc max simultaneous partials:
+  //
+  // push all start and end times
+  std::vector< IntervalEndpoint > startAndEndTimes;
+  for(const auto& startAndEnd : stats.partialTimeRanges)
   {
-    float maxTimeInPartial = stats.partialTimeRanges[i].mX2;
-    maxTime = std::max(maxTime, maxTimeInPartial);
+    startAndEndTimes.push_back(IntervalEndpoint{startAndEnd.mX1, 0});
+    startAndEndTimes.push_back(IntervalEndpoint{startAndEnd.mX2, 1});
+  }
+  // sort them
+  std::sort(startAndEndTimes.begin(), startAndEndTimes.end(), [](IntervalEndpoint a, IntervalEndpoint b){
+    return a.time < b.time;
+  });
+  // walk the sorted list keeping track of max simultaneously active partials
+  size_t activePartials{0};
+  size_t maxActive{0};
+  float maxActiveTime{0.f};
+  for(auto& p : startAndEndTimes)
+  {
+    
+    if(p.isEnd)
+    {
+      activePartials--;
+    }
+    else
+    {
+      activePartials++;
+      maxActive = std::max(activePartials, maxActive);
+      if(maxActive == activePartials)
+      {
+        maxActiveTime = p.time;
+      }
+    }
+    
+    std::cout << "time: " << p.time << (p.isEnd ? "-" : "+") << ", n = " << activePartials << "\n";
   }
   
-  stats.maxFrames = maxFrames;
-  stats.maxTimeInSeconds = maxTime;
-
+  assert(activePartials == 0);
+  stats.maxActivePartials = maxActive;
+  stats.maxActiveTime = maxActiveTime;
+  
+  std::cout << "\n\n max active: " << stats.maxActivePartials <<  "at time: " << stats.maxActiveTime << "\n";
 }
+
 
 // get an interpolated frame of data from the partial index p of the SumuPartialsData at time t.
 // note that the SumuPartialsData stats must be filled in first!
@@ -158,56 +184,6 @@ PartialFrame getPartialFrame(const SumuPartialsData& partialData, size_t partial
   return f;
 }
 
-// inefficient!
-PartialFrame  getPartialFrameDownsampled(const SumuPartialsData& partialData, size_t partialIndex, float time, float dTime)
-{
-//  PartialFrame f;
-//  if(dTime <= 1.0f)
-  
-  int sampleRadius{2};
-  size_t totalSamples{0};
-  
-  PartialFrame sum;
-  
-  if(partialIndex == 5)
-  {
-//    std::cout << "t = " << time << ", dt = " << dTime << "\n";
-  }
-  
-  for(int offset = -sampleRadius; offset <= sampleRadius; ++offset)
-  {
-    float x = time + dTime*offset;
-    PartialFrame sample = getPartialFrame(partialData, partialIndex, x);
-    
-    // get sum of frames
-    sum.amp += sample.amp;
-    sum.freq += sample.freq;
-    sum.bandwidth += sample.bandwidth;
-    
-    // phase ?
-    totalSamples++;
-    
-    if(partialIndex == 5)
-    {
-  //    std::cout << "+" << sample.amp << " ";
-    }
-  }
-  
-//  sum.amp /= totalSamples;
-  sum.freq /= totalSamples;
-  sum.bandwidth /= totalSamples;
-
-  if(partialIndex == 5)
-  {
-
-  
-//  std::cout << "/" << totalSamples << " = " << sum.amp << "\n";
-  }
-  
-  return sum;
-}
-
-
 // get an interpolated frame of data from the partial index p of the SumuPartialsData at time t.
 // note that the SumuPartialsData stats must be filled in first!
 //
@@ -251,7 +227,6 @@ PartialFrame getPartialFrameNearest(const SumuPartialsData& partialData, size_t 
       f.phase = partial.phase[nearestIndex];
     }
   }
-  
   
   return f;
 }

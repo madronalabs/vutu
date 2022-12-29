@@ -49,6 +49,7 @@ private:
   
   sumu::Sample _sourceSample;
   sumu::Sample _synthesizedSample;
+  float sourceDuration{0};
 
   std::unique_ptr< Loris::PartialList > _lorisPartials;
   std::unique_ptr< SumuPartialsData > _sumuPartials;
@@ -73,11 +74,19 @@ private:
 
   void _clearSynthesizedSample();
   void broadcastSynthesizedSample();
-  
+  void syncIntervals();
+
   // the state to which we can revert, stored as normalized values.
   Tree< Value > _revertState;
   bool _changedFromRevertValues{true};
 
+  // file paths
+  Path recentSamplesPath;
+  Path recentPartialsPath;
+  
+  // analysis / resynthesis interval
+  Interval sourceInterval{0, 0};
+  Interval analysisInterval{0, 0};
 
   
   Timer _debugTimer;

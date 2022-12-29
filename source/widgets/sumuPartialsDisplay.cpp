@@ -92,10 +92,16 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     Interval xRange{0.f, w - 1.f};
     Interval yRange{h - 1.f, 0.f};
     
+    
+    
+    float intervalStart = getFloatProperty("interval_start");
+    float intervalEnd = getFloatProperty("interval_end");
+    Interval timeInterval{intervalStart, intervalEnd};
+
+    
     constexpr float kMinLineLength{2.f};
-    Interval sampleTimeRange{0, _pPartials->stats.maxTimeInSeconds};
-    auto xToTime = projections::linear({0.f, w - 1.f}, sampleTimeRange );
-    auto timeToX = projections::linear(sampleTimeRange, {0.f, w - 1.f});
+    auto xToTime = projections::linear({0.f, w - 1.f}, timeInterval);
+    auto timeToX = projections::linear(timeInterval, {0.f, w - 1.f});
     auto freqRange = _pPartials->stats.freqRange;
     //auto freqToY = projections::intervalMap(freqRange, yRange, projections::unity);//exp(freqRange));
     
@@ -199,56 +205,7 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
     std::cout << " frames read: " << totalFramesRead << " frames drawn: " << totalFramesDrawn << ", painting time rough millis: " << roughMillisTotal << "\n";
     
-    
-    
-    /*
-     for(int x=0; x<w; ++x)
-     {
-     float time = xToTime(x);
-     float dTime = xToTime(x + 1) - time;
-     
-     for(int p=0; p<nPartials; ++p)
-     {
-     auto frame = getPartialFrameDownsampled(*_pPartials, p, time, dTime);
-     //    auto frame = getPartialFrame(*_pPartials, p, time);
-     
-     if(frame.amp > 0.f)
-     {
-     float thickness = ampToThickness(frame.amp);
-     float y = freqToY(frame.freq);
-     
-     float colorOpacity = 0.5f;
-     float maxOpacity = 0.75f;
-     float pathOpacity = 0.75f;
-     
-     // adding noise fades opacity up to 1
-     float bw = bandwidthToUnity(frame.bandwidth);
-     pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
-     
-     // nanovg workaround
-     if(thickness < 1.f)
-     {
-     pathOpacity *= thickness;
-     thickness = 1.f;
-     }
-     
-     auto colorWithNoise = lerp(sineColor, noiseColor, bw);
-     auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
-     
-     float y1 = clamp(y - thickness/2.f, 0.f, float(h));
-     float y2 = clamp(y + thickness/2.f, 0.f, float(h));
-     
-     nvgBeginPath(nvg);
-     nvgMoveTo(nvg, x, y1);
-     nvgLineTo(nvg, x, y2);
-     
-     nvgStrokeColor(nvg, partialColor);//
-     //nvgStrokeColor(nvg, sineColor);
-     nvgStroke(nvg);
-     }
-     }
-     }
-     */
+  
   }
   
   // end backing layer update
@@ -301,6 +258,10 @@ void SumuPartialsDisplay::draw(ml::DrawContext dc)
     nvgFillColor(nvg, bgColor);
     nvgFill(nvg);
     
+    float intervalStart = getFloatProperty("interval_start");
+    float intervalEnd = getFloatProperty("interval_end");
+    Interval timeInterval{intervalStart, intervalEnd};
+
     
     // make an image pattern. The entire source image maps to the specified rect of the destination.
     NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
@@ -313,7 +274,33 @@ void SumuPartialsDisplay::draw(ml::DrawContext dc)
     nvgFillPaint(nvg, img);
     nvgFill(nvg);
     nvgRestore(nvg);
+    
+    // draw max active time triangle
+    if(_pPartials->stats.maxActiveTime > 0.f)
+    {
+      Interval xRange{marginBounds.left(), marginBounds.right()};
+      auto xToProgress = projections::linear({0.f, 1.f}, xRange);
+      auto timeToX = projections::linear(timeInterval, {0.f, w - 1.f});
+      
+      float px = timeToX(_pPartials->stats.maxActiveTime);
+      
+      float triSize = gridSizeInPixels/8;
+
+      nvgBeginPath(nvg);
+      nvgFillColor(nvg, markColor);
+
+      nvgMoveTo(nvg, px, marginBounds.top());
+      nvgLineTo(nvg, px + triSize, marginBounds.top());
+      nvgLineTo(nvg, px, marginBounds.top() + triSize*2 );
+      nvgLineTo(nvg, px - triSize, marginBounds.top());
+      nvgLineTo(nvg, px, marginBounds.top());
+
+      nvgFill(nvg);
+    }
   }
+  
+  // TEST
+  //std::cout << "PartialsDisplay start: " << getFloatProperty("interval_start") << " -- " <<  getFloatProperty("interval_end") << "\n";
   
   // draw border
   nvgBeginPath(nvg);

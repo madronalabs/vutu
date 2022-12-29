@@ -380,7 +380,32 @@ void VutuView::onMessage(Message msg)
           break;
         }
           
+        case(hash("set_interval_start")):
+        {
+          Message intervalStartMsg{"set_prop/interval_start", msg.value.getFloatValue()};
+          sendMessage(_view->_widgets["synth"], intervalStartMsg);
+          sendMessage(_view->_widgets["partials"], intervalStartMsg);
+          break;
+        }
+          
+        case(hash("set_interval_end")):
+        {
+          Message intervalEndMsg{"set_prop/interval_end", msg.value.getFloatValue()};
+          sendMessage(_view->_widgets["synth"], intervalEndMsg);
+          sendMessage(_view->_widgets["partials"], intervalEndMsg);
+          break;
+        }
+        case(hash("set_source_duration")):
+        {
+          Message intervalStartMsg{"set_prop/interval_start", 0};
+          Message intervalEndMsg{"set_prop/interval_end", msg.value.getFloatValue()};
+          sendMessage(_view->_widgets["source"], intervalStartMsg);
+          sendMessage(_view->_widgets["source"], intervalEndMsg);
 
+          break;
+        }
+
+          
         default:
         {
           // if the message is not from the controller,

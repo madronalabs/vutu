@@ -20,13 +20,16 @@ static constexpr char kSumuPartialsFileType[] = "sumuPartials";
 struct PartialsStats
 {
   // get range of values for each parameter (except phase)
-  float maxTimeInSeconds; // duration of the whole analyzed sample
+  float minTimeInSeconds;
+  float maxTimeInSeconds;
   Interval timeRange; // min and max time in all partials
   Interval ampRange;
   Interval bandwidthRange;
   Interval freqRange;
   size_t nPartials;
-  size_t maxFrames;   // max number of frames in any partial
+  size_t maxActivePartials;
+  float maxActiveTime;
+  
   std::vector< Interval > partialTimeRanges; // time range for each partial
 };
 
@@ -62,9 +65,6 @@ Interval getParamRangeInPartials(const SumuPartialsData& partialData, Symbol par
 
 // return an interpolated frame of a single Partial at the specified time.
 PartialFrame getPartialFrame(const SumuPartialsData& partialData, size_t partialIndex, float time);
-
-// return an interpolated frame of a single Partial at the specified time.
-PartialFrame getPartialFrameDownsampled(const SumuPartialsData& partialData, size_t partialIndex, float time, float dTime);
 
 // return a frame of a single Partial at the nearest sample to the specified time.
 PartialFrame getPartialFrameNearest(const SumuPartialsData& partialData, size_t partialIndex, float time);

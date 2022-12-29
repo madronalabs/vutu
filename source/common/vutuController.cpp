@@ -167,6 +167,16 @@ void VutuController::broadcastSynthesizedSample()
   sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
 }
 
+void VutuController::syncIntervals()
+{
+  sendMessageToActor(_processorName, {"do/set_interval_start", analysisInterval.mX1});
+  sendMessageToActor(_processorName, {"do/set_interval_end", analysisInterval.mX2});
+  sendMessageToActor(_viewName, {"do/set_interval_start", analysisInterval.mX1});
+  sendMessageToActor(_viewName, {"do/set_interval_end", analysisInterval.mX2});
+  
+  sendMessageToActor(_viewName, {"do/set_source_duration", sourceDuration});
+}
+
 int VutuController::loadSampleFromPath(Path samplePath)
 {
   int OK{ false };
@@ -226,6 +236,10 @@ int VutuController::loadSampleFromPath(Path samplePath)
     }
     
     _sourceSample.normalize();
+    
+    // set ource duration and reset analysis interval to whole source length
+    sourceDuration = framesRead/float(_sourceSample.sampleRate);
+    analysisInterval = {0.f, sourceDuration};
   }
   return OK;
 }
@@ -268,7 +282,14 @@ Path VutuController::showLoadDialog(Symbol fileType)
   {
     case(hash("samples")):
     {
-      defaultLocation = (getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
+      if(recentSamplesPath)
+      {
+        defaultLocation = File(recentSamplesPath);
+      }
+      else
+      {
+        defaultLocation = File(getApplicationDataRoot(getMakerName(), getAppName(), "samples"));
+      }
       auto defaultPathText = defaultLocation.getFullPathAsText();
 
       nfdfilteritem_t filterItem[2] = { { "WAV audio", "wav" }, { "AIFF audio", "aiff,aif,aifc" } };
@@ -277,9 +298,15 @@ Path VutuController::showLoadDialog(Symbol fileType)
     }
     case(hash("partials")):
     {
-      defaultLocation = (getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
+      if(recentPartialsPath)
+      {
+        defaultLocation = File(recentPartialsPath);
+      }
+      else
+      {
+        defaultLocation = File(getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
+      }
       auto defaultPathText = defaultLocation.getFullPathAsText();
-
       nfdfilteritem_t filterItem[1] = { { "JSON data", "json" } }; // can add compressed JSON here
       result = NFD_OpenDialog(&outPath, filterItem, 1, defaultPathText.getText());
       break;
@@ -288,10 +315,22 @@ Path VutuController::showLoadDialog(Symbol fileType)
   
   if (result == NFD_OKAY)
   {
-    puts("Success!");
-    puts(outPath);
-    
     returnVal = Path(outPath);
+    
+    switch(hash(fileType))
+    {
+      case(hash("samples")):
+      {
+        recentSamplesPath = returnVal;
+        break;
+      }
+      case(hash("partials")):
+      {
+        recentPartialsPath = returnVal;
+        break;
+      }
+    }
+      
     NFD_FreePath(outPath);
   }
   else if (result == NFD_CANCEL)
@@ -419,8 +458,6 @@ int VutuController::analyzeSample()
   
   analyze( vx.data(), totalFrames, sr, _lorisPartials.get() );
   
-  float maxTimeInSeconds = totalFrames / float(sr);
-  
   // loris channelize and distill
   LinearEnvelope * reference = 0;
   float minFreq = res;
@@ -467,6 +504,7 @@ void VutuController::synthesize()
   }
   
   _synthesizedSample.normalize();
+  _synthesizedSample.sampleRate = params.sampleRate;
 }
 
 
@@ -475,7 +513,7 @@ void VutuController::onMessage(Message m)
 {
   if(!m.address) return;
   
- // std::cout << "VutuController::onMessage:" << m.address << " " << m.value << " \n ";
+// std::cout << "VutuController::onMessage:" << m.address << " " << m.value << " \n ";
   
   bool messageHandled{false};
   
@@ -495,14 +533,14 @@ void VutuController::onMessage(Message m)
       Path whatProp = tail(addr);
       switch(hash(head(whatProp)))
       {
-        case(hash("source_progress")):
+        case(hash("source_time")):
         {
-          sendMessageToActor(_viewName, {"widget/source/set_prop/progress", m.value});
+          sendMessageToActor(_viewName, {"widget/source/set_prop/playback_time", m.value});
           break;
         }
-        case(hash("synth_progress")):
+        case(hash("synth_time")):
         {
-          sendMessageToActor(_viewName, {"widget/synth/set_prop/progress", m.value});
+          sendMessageToActor(_viewName, {"widget/synth/set_prop/playback_time", m.value});
           break;
         }
       }
@@ -526,6 +564,8 @@ void VutuController::onMessage(Message m)
           broadcastPartialsData();
           broadcastSynthesizedSample();
           setButtonEnableStates();
+          syncIntervals();
+          
           messageHandled = true;
           break;
         }
@@ -594,7 +634,7 @@ void VutuController::onMessage(Message m)
           // switch play button texts
           sendMessageToActor(_viewName, {"widget/play_source/set_prop/text", TextFragment("play")});
           sendMessageToActor(_viewName, {"widget/play_synth/set_prop/text", TextFragment("play")});
-          sendMessageToActor(_viewName, {"widget/sample/set_prop/progress", 0.f});
+          sendMessageToActor(_viewName, {"widget/sample/set_prop/playback_time", 0.f});
           messageHandled = true;
           break;
         }
@@ -626,11 +666,19 @@ void VutuController::onMessage(Message m)
               _lorisPartials = std::make_unique< Loris::PartialList >();
               _sumuToLorisPartials(_sumuPartials.get(), _lorisPartials.get() );
               
+              // clear source sample so all data is consistent
+              clearSourceSample();
+              broadcastSourceSample();
+              
               // clear synthesized sample and sync UI
               _clearSynthesizedSample();
               broadcastPartialsData();
               broadcastSynthesizedSample();
               setButtonEnableStates();
+              
+              // set interval to whole partials file and broadcast
+              analysisInterval = {_sumuPartials->stats.timeRange.mX1, _sumuPartials->stats.timeRange.mX2};
+              syncIntervals();
             }
           }
           messageHandled = true;
