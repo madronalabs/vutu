@@ -51,6 +51,7 @@ struct SumuPartialsData
   
   void calcStats();
   TextFragment getStatsText();
+  void cutHighs(float f);
   void cleanOutliers();
 };
 

@@ -60,6 +60,25 @@ struct IntervalEndpoint
 };
 
 
+void SumuPartialsData::cutHighs(float fCut)
+{
+  for(int i=0; i<partials.size(); ++i)
+  {
+    const SumuPartial& partial = partials[i];
+    
+    // if any instantaneous frequency of partial is > f, remove the partial
+    float fMax = *std::max_element(partial.freq.begin(), partial.freq.end());
+    if(fMax > fCut)
+    {
+      partials[i] = SumuPartial();
+    }
+  }
+  
+  // do cleanOutliers() afterwards to remove empty Partials
+}
+
+
+
 void SumuPartialsData::cleanOutliers()
 {
   int before, after;
@@ -67,13 +86,11 @@ void SumuPartialsData::cleanOutliers()
   auto discardPartial = [](const SumuPartial& p){
     return p.time.size() <= 1;
   };
- 
   
   before = partials.size();
   partials.erase(std::remove_if(partials.begin(), partials.end(), discardPartial), partials.end());
   after = partials.size();
   std::cout << "cleanup: before: " << before << ", after: " << after << "\n";
-             
 }
 
 

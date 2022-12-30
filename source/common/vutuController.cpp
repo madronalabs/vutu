@@ -31,6 +31,7 @@ using namespace sumu;
 
 void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pSumu)
 {
+  pSumu->partials.clear();
   for (const auto& partial : *pLoris) {
     
     SumuPartial sp;
@@ -55,7 +56,7 @@ void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pS
 
 void _sumuToLorisPartials(const SumuPartialsData* pSumu, Loris::PartialList* pLoris)
 {
-
+  pLoris->clear();
     
   for (auto it = pSumu->partials.begin(); it != pSumu->partials.end(); it++) {
     const SumuPartial& sp = *it;
@@ -427,6 +428,7 @@ void VutuController::saveTextToPath(const TextFragment& text, Path savePath)
 
 int VutuController::analyzeSample()
 {
+
   int status{ false };
   std::cout << "VutuController::analyzing...";
   
@@ -448,10 +450,13 @@ int VutuController::analyzeSample()
   auto width = getPlainValue(params, "window_width");
   auto drift = getPlainValue(params, "freq_drift");
   auto floor = getPlainValue(params, "amp_floor");
+  auto loCut = getPlainValue(params, "lo_cut");
+  auto hiCut = getPlainValue(params, "hi_cut");
 
   analyzer_configure(res, width);
   analyzer_setFreqDrift(drift);
   analyzer_setAmpFloor(floor);
+  analyzer_setFreqFloor(loCut);
     
   // make new partial list and give ownership to _lorisPartials
   Loris::PartialList* newPartials = createPartialList();
@@ -459,25 +464,19 @@ int VutuController::analyzeSample()
   
   analyze( vx.data(), totalFrames, sr, _lorisPartials.get() );
   
-  // loris channelize and distill
-  LinearEnvelope * reference = 0;
-  float minFreq = res;
-  float maxFreq = res*1.5f;
-  reference = createFreqReference( _lorisPartials.get(), minFreq, maxFreq, 0 );
-//  channelize( _lorisPartials.get(), reference, 1 );
-//  distill( _lorisPartials.get() );
-  destroyLinearEnvelope( reference );
-  reference = nullptr;
-  
   if(partialList_size(_lorisPartials.get()) > 0)
   {
     status = true;
     _sumuPartials = std::make_unique< SumuPartialsData >();
     _lorisToSumuPartials(_lorisPartials.get(), _sumuPartials.get());
     
+    _sumuPartials->cutHighs(hiCut);
     _sumuPartials->cleanOutliers();
     _sumuPartials->calcStats();
     _partialsStatsText = _sumuPartials->getStatsText();
+    
+    // convert back to loris partials after cleanup
+    _sumuToLorisPartials(_sumuPartials.get(), _lorisPartials.get());
     
   }
 

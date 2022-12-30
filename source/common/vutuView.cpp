@@ -64,8 +64,12 @@ void VutuView::layoutView(DrawContext dc)
   _view->_widgets["resolution"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {2.0, dialsY1}));
   _view->_widgets["window_width"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {5.0, dialsY1}));
   _view->_widgets["amp_floor"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {3.5, dialsY2}));
-  _view->_widgets["freq_drift"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {6.5, dialsY2}));
-
+  
+  _view->_widgets["lo_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {6.5, dialsY2}));
+  _view->_widgets["hi_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {8, dialsY1}));
+  
+  _view->_widgets["freq_drift"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {9.5, dialsY2}));
+  
   // right dials
   _view->_widgets["volume"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {gx - 2.f, bottomY + 3.5f}));
   
@@ -77,12 +81,10 @@ void VutuView::layoutView(DrawContext dc)
     _view->_backgroundWidgets[labelName]->setRectProperty
     ("bounds", alignTopCenterToPoint(labelRect, dialRect.bottomCenter() - Vec2(0, 0.5)));
   };
-  for(auto dialName : {"resolution", "window_width", "amp_floor", "freq_drift", "volume"})
+  for(auto dialName : {"resolution", "window_width", "amp_floor", "lo_cut", "hi_cut", "freq_drift", "volume"})
   {
     positionLabelUnderDial(dialName);
   }
-  
-
   
   // info: whole width
   _view->_widgets["info"]->setRectProperty("bounds", ml::Rect(0, bottomY, gx, 1));
@@ -183,6 +185,8 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   addControlLabel("window_width_label", "window width");
   addControlLabel("amp_floor_label", "amp floor");
   addControlLabel("freq_drift_label", "freq. drift");
+  addControlLabel("lo_cut_label", "lo cut");
+  addControlLabel("hi_cut_label", "hi cut");
   addControlLabel("volume_label", "volume");
   
   auto addOtherLabel = [&](Path name, TextFragment t)
@@ -218,11 +222,25 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     {"feature_scale", 2.0 },
     {"param", "amp_floor" }
   } );
+  
   _view->_widgets.add_unique< DialBasic >("freq_drift", WithValues{
     {"size", largeDialSize },
     {"feature_scale", 2.0 },
     {"param", "freq_drift" }
   } );
+   
+  _view->_widgets.add_unique< DialBasic >("lo_cut", WithValues{
+    {"size", largeDialSize },
+    {"feature_scale", 2.0 },
+    {"param", "lo_cut" }
+  } );
+  
+  _view->_widgets.add_unique< DialBasic >("hi_cut", WithValues{
+    {"size", largeDialSize },
+    {"feature_scale", 2.0 },
+    {"param", "hi_cut" }
+  } );
+  
   _view->_widgets.add_unique< DialBasic >("volume", WithValues{
     {"size", largeDialSize },
     {"feature_scale", 2.0 },

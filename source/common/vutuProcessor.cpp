@@ -31,7 +31,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
     { "range", { 8, 1024 } },
-    { "plaindefault", 20 },
+    { "plaindefault", 40 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -56,6 +56,22 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "range", {2, 200} },
     { "plaindefault", 30 },
     { "log", false },
+    { "units", "Hz" }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "lo_cut" },
+    { "range", {20, 2000} },
+    { "plaindefault", 20 },
+    { "log", true },
+    { "units", "Hz" }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "hi_cut" },
+    { "range", {200, 20000} },
+    { "plaindefault", 10000 },
+    { "log", true },
     { "units", "Hz" }
   } ) );
   

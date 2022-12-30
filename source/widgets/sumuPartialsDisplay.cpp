@@ -209,7 +209,7 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
       float avgAmp = totalAmp / framesInPartial;
       if(avgAmp > maxAvgAmp) {maxAvgAmp = avgAmp;}
       if(avgAmp < minAvgAmp) {minAvgAmp = avgAmp;}
-      float spineOpacity = 0.5f;//std::clamp(avgAmp * 50.f, 0.25f, 1.0f);
+      float spineOpacity = 1.0f;//std::clamp(avgAmp * 50.f, 0.25f, 1.0f);
       nvgStrokeColor(nvg, multiplyAlpha(spineColor, spineOpacity));
       for(int i = 0; i < framesInPartial; ++i)
       {
