@@ -13,8 +13,6 @@ using namespace ml;
 
 class SampleDisplay : public Widget
 {
- 
-
   void paintSample(ml::DrawContext dc);
 
   bool _initialized{ false };

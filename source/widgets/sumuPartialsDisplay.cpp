@@ -93,7 +93,6 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     Interval yRange{h - 1.f, 0.f};
     
     
-    
     float intervalStart = getFloatProperty("interval_start");
     float intervalEnd = getFloatProperty("interval_end");
     Interval timeInterval{intervalStart, intervalEnd};
@@ -102,7 +101,8 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     constexpr float kMinLineLength{2.f};
     auto xToTime = projections::linear({0.f, w - 1.f}, timeInterval);
     auto timeToX = projections::linear(timeInterval, {0.f, w - 1.f});
-    auto freqRange = _pPartials->stats.freqRange;
+//    auto freqRange = _pPartials->stats.freqRange;
+    auto freqRange = Interval{0, _pPartials->stats.freqRange.mX2};
     //auto freqToY = projections::intervalMap(freqRange, yRange, projections::unity);//exp(freqRange));
     
     auto freqToY = projections::linear(freqRange, yRange);
@@ -121,9 +121,9 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     
     // time the partials bit
     auto roughStart = high_resolution_clock::now();
-    size_t totalFramesRead{0};
     size_t totalFramesDrawn{0};
     
+    // draw frame amplitudes
     for(int p=0; p<nPartials; ++p)
     {
       const auto& partial = _pPartials->partials[p];
@@ -141,69 +141,104 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
         
         float x = timeToX(_pPartials->partials[p].time[i]);
         
-        totalFramesRead++;
-        
-        if(frame.amp > 0.f)
-          if((i == 0) || (x > x1 + kMinLineLength))
+
+        if((i == 0) || (x > x1 + kMinLineLength))
+        {
+          x1 = x;
+          totalFramesDrawn++;
+          
+          float thickness = ampToThickness(frame.amp);
+          float y = freqToY(frame.freq);
+          
+          float colorOpacity = 0.5f;
+          float maxOpacity = 1.0f;
+          
+          
+          // adding noise fades opacity up to 1
+          float bw = bandwidthToUnity(frame.bandwidth);
+          
+          // std::cout << "frame " << i << " bw " << bw << "\n";
+          
+          float pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
+          
+          
+          if(thickness < 2.f)
           {
-            x1 = x;
-            totalFramesDrawn++;
-            
-            float thickness = ampToThickness(frame.amp);
-            float y = freqToY(frame.freq);
-            
-            float colorOpacity = 0.5f;
-            float maxOpacity = 0.75f;
-            float pathOpacity = 0.75f;
-            
-            // adding noise fades opacity up to 1
-            float bw = bandwidthToUnity(frame.bandwidth);
-            
-            // std::cout << "frame " << i << " bw " << bw << "\n";
-            
-            pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
-            
-            
-            if(thickness < 1.f)
-            {
-              //pathOpacity *= thickness;
-              thickness = 1.f;
-            }
-            
-            auto colorWithNoise = lerp(sineColor, noiseColor, bw);
-            auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
-            
-            float y1 = clamp(y - thickness/2.f, 0.f, float(h));
-            float y2 = clamp(y + thickness/2.f, 0.f, float(h));
-            
-            /*
-             if(i == 0)
-             {
-             nvgMoveTo(nvg, x, y);
-             }
-             else
-             {
-             nvgLineTo(nvg, x, y);
-             }
-             */
-            nvgStrokeColor(nvg, partialColor);
-            nvgBeginPath(nvg);
-            
-            nvgMoveTo(nvg, x, y1);
-            nvgLineTo(nvg, x, y2);
-            nvgStroke(nvg);
+            //pathOpacity *= thickness;3
+            thickness = 2.f;
           }
+          
+          auto colorWithNoise = lerp(sineColor, noiseColor, bw);
+          auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
+          
+          float y1 = clamp(y - thickness/2.f, 0.f, float(h));
+          float y2 = clamp(y + thickness/2.f, 0.f, float(h));
+
+          nvgStrokeColor(nvg, partialColor);
+          nvgBeginPath(nvg);
+          
+          nvgMoveTo(nvg, x, y1);
+          nvgLineTo(nvg, x, y2);
+          nvgStroke(nvg);
+        }
       }
-      
-      
-      //nvgStrokeColor(nvg, sineColor);
-      // nvgStroke(nvg);
     }
     
+
+    float maxAvgAmp = 0.f;
+    float minAvgAmp = 100000.f;
+        
+    // draw spines
+    auto spineColor(rgba(0, 1, 1, 1));
+    nvgStrokeWidth(nvg, 1); // TEMP
+//    nvgStrokeColor(nvg, multiplyAlpha(spineColor, 0.5));
+//    nvgBeginPath(nvg);
+    for(int p=0; p<nPartials; ++p)
+    {
+      const auto& partial = _pPartials->partials[p];
+      size_t framesInPartial = partial.time.size();
+      
+      // get average amp
+      float totalAmp = 0.f;
+      for(int i = 0; i < framesInPartial; ++i)
+      {
+        auto frame = getPartialFrameByIndex(*_pPartials, p, i);
+        totalAmp += _pPartials->partials[p].amp[i];
+      }
+      
+      float avgAmp = totalAmp / framesInPartial;
+      if(avgAmp > maxAvgAmp) {maxAvgAmp = avgAmp;}
+      if(avgAmp < minAvgAmp) {minAvgAmp = avgAmp;}
+      float spineOpacity = 0.5f;//std::clamp(avgAmp * 50.f, 0.25f, 1.0f);
+      nvgStrokeColor(nvg, multiplyAlpha(spineColor, spineOpacity));
+      for(int i = 0; i < framesInPartial; ++i)
+      {
+        auto frame = getPartialFrameByIndex(*_pPartials, p, i);
+        float x = timeToX(_pPartials->partials[p].time[i]);
+        float y = freqToY(frame.freq);
+        
+        if(i == 0)
+        {
+          nvgBeginPath(nvg);
+          nvgMoveTo(nvg, x, y);
+        }
+        else if(i < framesInPartial - 1)
+        {
+          nvgLineTo(nvg, x, y);
+        }
+        else
+        {
+          nvgStroke(nvg);
+        }
+      }
+    }
+
     
+    std::cout << "\n min avg ampL: " << minAvgAmp << " max avg amp: " << maxAvgAmp << "\n";
+
     auto roughEnd = high_resolution_clock::now();
     auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
-    std::cout << " frames read: " << totalFramesRead << " frames drawn: " << totalFramesDrawn << ", painting time rough millis: " << roughMillisTotal << "\n";
+    std::cout << "partials painting time rough millis: " << roughMillisTotal << "\n";
     
   
   }

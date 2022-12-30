@@ -59,6 +59,24 @@ struct IntervalEndpoint
   long isEnd;
 };
 
+
+void SumuPartialsData::cleanOutliers()
+{
+  int before, after;
+  
+  auto discardPartial = [](const SumuPartial& p){
+    return p.time.size() <= 1;
+  };
+ 
+  
+  before = partials.size();
+  partials.erase(std::remove_if(partials.begin(), partials.end(), discardPartial), partials.end());
+  after = partials.size();
+  std::cout << "cleanup: before: " << before << ", after: " << after << "\n";
+             
+}
+
+
 // Get stats for partials data to aid synthesis and drawing.
 // TODO check that time is monotonically increasing
 //
@@ -106,7 +124,6 @@ void SumuPartialsData::calcStats()
   float maxActiveTime{0.f};
   for(auto& p : startAndEndTimes)
   {
-    
     if(p.isEnd)
     {
       activePartials--;
@@ -121,16 +138,26 @@ void SumuPartialsData::calcStats()
       }
     }
     
-    std::cout << "time: " << p.time << (p.isEnd ? "-" : "+") << ", n = " << activePartials << "\n";
+    // std::cout << "time: " << p.time << (p.isEnd ? "-" : "+") << ", n = " << activePartials << "\n";
   }
   
   assert(activePartials == 0);
+  
   stats.maxActivePartials = maxActive;
   stats.maxActiveTime = maxActiveTime;
   
   std::cout << "\n\n max active: " << stats.maxActivePartials <<  "at time: " << stats.maxActiveTime << "\n";
 }
 
+TextFragment SumuPartialsData::getStatsText()
+{
+  TextFragment nPartials;
+  
+  TextFragment freq;
+ // TextFragment r(nPartials, maxPartials, freq, duration);
+  
+  return "OK";
+}
 
 // get an interpolated frame of data from the partial index p of the SumuPartialsData at time t.
 // note that the SumuPartialsData stats must be filled in first!

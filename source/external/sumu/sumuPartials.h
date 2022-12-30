@@ -50,6 +50,8 @@ struct SumuPartialsData
   Symbol type;
   
   void calcStats();
+  TextFragment getStatsText();
+  void cleanOutliers();
 };
 
 struct PartialFrame
@@ -230,8 +232,7 @@ inline SumuPartialsData* jsonToSumuPartials(JSONHolder& jsonData)
     }
     obj = obj->next;
   }
-  
-  pSumuPartials->calcStats();
+
   return pSumuPartials;
 }
 

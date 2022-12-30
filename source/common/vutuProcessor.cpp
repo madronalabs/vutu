@@ -30,7 +30,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 {
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
-    { "range", { 8, 512 } },
+    { "range", { 8, 1024 } },
     { "plaindefault", 20 },
     { "log", true },
     { "units", "Hz" }
@@ -53,9 +53,9 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "freq_drift" },
-    { "range", {10, 100} },
+    { "range", {2, 200} },
     { "plaindefault", 30 },
-    { "log", true },
+    { "log", false },
     { "units", "Hz" }
   } ) );
   
@@ -249,7 +249,7 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
 
 void VutuProcessor::onMessage(Message msg)
 {
-  std::cout << "VutuProcessor: " << msg.address << " -> " << msg.value << "\n";
+  //std::cout << "VutuProcessor: " << msg.address << " -> " << msg.value << "\n";
   
   switch(hash(head(msg.address)))
   {

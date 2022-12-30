@@ -87,6 +87,8 @@ private:
   // analysis / resynthesis interval
   Interval sourceInterval{0, 0};
   Interval analysisInterval{0, 0};
+  
+  TextFragment _partialsStatsText;
 
   
   Timer _debugTimer;

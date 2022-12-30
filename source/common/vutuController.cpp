@@ -50,9 +50,7 @@ void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pS
   pSumu->version = kSumuPartialsFileVersion;
   
   std::cout << "_lorisToSumuPartials: " << pSumu->partials.size() << " partials. \n ";
-  
-  pSumu->calcStats();
-}
+  }
 
 
 void _sumuToLorisPartials(const SumuPartialsData* pSumu, Loris::PartialList* pLoris)
@@ -237,7 +235,7 @@ int VutuController::loadSampleFromPath(Path samplePath)
     
     _sourceSample.normalize();
     
-    // set ource duration and reset analysis interval to whole source length
+    // set source duration and reset analysis interval to whole source length
     sourceDuration = framesRead/float(_sourceSample.sampleRate);
     analysisInterval = {0.f, sourceDuration};
   }
@@ -261,6 +259,9 @@ int VutuController::loadPartialsFromPath(Path partialsPath)
       _sumuPartials = std::unique_ptr<SumuPartialsData>(newPartials);
       OK = true;
     }
+    
+    _sumuPartials->calcStats();
+    _partialsStatsText = _sumuPartials->getStatsText();
     
     //std::cout << "text: " << partialsText << "\n";
     
@@ -463,8 +464,8 @@ int VutuController::analyzeSample()
   float minFreq = res;
   float maxFreq = res*1.5f;
   reference = createFreqReference( _lorisPartials.get(), minFreq, maxFreq, 0 );
-  channelize( _lorisPartials.get(), reference, 1 );
-  distill( _lorisPartials.get() );
+//  channelize( _lorisPartials.get(), reference, 1 );
+//  distill( _lorisPartials.get() );
   destroyLinearEnvelope( reference );
   reference = nullptr;
   
@@ -473,12 +474,18 @@ int VutuController::analyzeSample()
     status = true;
     _sumuPartials = std::make_unique< SumuPartialsData >();
     _lorisToSumuPartials(_lorisPartials.get(), _sumuPartials.get());
+    
+    _sumuPartials->cleanOutliers();
+    _sumuPartials->calcStats();
+    _partialsStatsText = _sumuPartials->getStatsText();
+    
   }
 
   return status;
 }
 
 // generate the synthesized audio from the Loris partials.
+// note output sample may be a different sample rate!
 void VutuController::synthesize()
 {
   std::vector<double> samples;
@@ -490,19 +497,37 @@ void VutuController::synthesize()
   if(!_lorisPartials.get()) return;
   
   Loris::Synthesizer synth(params, samples);
+  synth.setFadeTime(0.001f);
   synth.synthesize(_lorisPartials->begin(), _lorisPartials->end());
   
   // convert samples to floats
   std::cout << "VutuController: synthesize: " << samples.size() << "samples synthesized. \n";
-  
   if(!samples.size()) return;
   
-  _synthesizedSample.data.resize(samples.size());
+  // if there is a source, make buffer big enough to hold entire source at new sample rate
+  size_t synthSamples;
+  if(_sourceSample.data.size() > 0)
+  {
+    size_t sourceSamples = _sourceSample.data.size();
+    size_t sourceSr = _sourceSample.sampleRate;
+    size_t synthSr = params.sampleRate;
+    synthSamples = sourceSamples*double(synthSr)/double(sourceSr);
+  }
+  else
+  {
+    synthSamples = samples.size();
+  }
+  
+  _synthesizedSample.data.resize(synthSamples);
   for(int i=0; i<samples.size(); ++i)
   {
     _synthesizedSample.data[i] = samples[i];
   }
-  
+  for(int i=samples.size(); i < _synthesizedSample.data.size(); ++i)
+  {
+    _synthesizedSample.data[i] = 0.f;
+  }
+
   _synthesizedSample.normalize();
   _synthesizedSample.sampleRate = params.sampleRate;
 }
