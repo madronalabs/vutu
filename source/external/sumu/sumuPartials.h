@@ -49,8 +49,16 @@ struct SumuPartialsData
   int version;
   Symbol type;
   
+  // source and analysis parameters
+  TextFragment sourceFile;
+  float resolution;
+  float windowWidth;
+  float ampFloor;
+  float freqDrift;
+  float loCut;
+  float hiCut;
+  
   void calcStats();
-  TextFragment getStatsText();
   void cutHighs(float f);
   void cleanOutliers();
 };
@@ -98,7 +106,16 @@ inline JSONHolder sumuPartialsToJSON(const SumuPartialsData& partialsData)
   
   cJSON_AddNumberToObject(root.data(), "version", kSumuPartialsFileVersion);
   cJSON_AddStringToObject(root.data(), "type", kSumuPartialsFileType);
+  cJSON_AddStringToObject(root.data(), "source", partialsData.sourceFile.getText());
   
+  // add analysis parameters
+  cJSON_AddNumberToObject(root.data(), "resolution", partialsData.resolution);
+  cJSON_AddNumberToObject(root.data(), "window_width", partialsData.windowWidth);
+  cJSON_AddNumberToObject(root.data(), "amp_floor", partialsData.ampFloor);
+  cJSON_AddNumberToObject(root.data(), "freq_drift", partialsData.freqDrift);
+  cJSON_AddNumberToObject(root.data(), "lo_cut", partialsData.loCut);
+  cJSON_AddNumberToObject(root.data(), "hi_cut", partialsData.hiCut);
+
   const size_t nPartials = partialsData.partials.size();
   
   std::cout << "exporting " << nPartials << " partials \n";
@@ -121,7 +138,6 @@ inline JSONHolder sumuPartialsToJSON(const SumuPartialsData& partialsData)
     cJSON_AddItemToObject(pNewJSONPartial, "phase", cJSON_CreateFloatArray(sp.phase.data(), partialLength));
     cJSON_AddItemToObject(root.data(), partialIndexText.getText(), pNewJSONPartial);
   }
-  
   return root;
 }
 
@@ -145,7 +161,6 @@ inline SumuPartialsData* jsonToSumuPartials(JSONHolder& jsonData)
         if(TextFragment(obj->string) == "version")
         {
           pSumuPartials->version = obj->valueint;
-          std::cout << "version: " << pSumuPartials->version << "\n";
         }
         break;
       }
@@ -154,7 +169,10 @@ inline SumuPartialsData* jsonToSumuPartials(JSONHolder& jsonData)
         if(TextFragment(obj->string) == "type")
         {
           pSumuPartials->type = Symbol(obj->valuestring);
-          std::cout << "type: " << pSumuPartials->type << "\n";
+        }
+        else if(TextFragment(obj->string) == "source")
+        {
+          pSumuPartials->sourceFile = TextFragment(obj->valuestring);
         }
         break;
       }
@@ -163,7 +181,6 @@ inline SumuPartialsData* jsonToSumuPartials(JSONHolder& jsonData)
         TextFragment pStr(obj->string);
         if(pStr.beginsWith("p"))
         {
-          
           std::cout << "partial:" << pStr << "\n";
           
           pSumuPartials->partials.emplace_back(SumuPartial());
@@ -218,25 +235,19 @@ inline SumuPartialsData* jsonToSumuPartials(JSONHolder& jsonData)
                 break;
               }
             }
-              
             
             jsonArrays = jsonArrays->next;
             nArrays++;
-            
-            
+
           }
-          
         }
         break;
       }
-
     }
     obj = obj->next;
   }
-
   return pSumuPartials;
 }
-
 
 
 }

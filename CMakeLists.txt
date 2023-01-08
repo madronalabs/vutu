@@ -11,16 +11,12 @@
 
 cmake_minimum_required (VERSION 3.16)
 
-set(CMAKE_OSX_DEPLOYMENT_TARGET "11" CACHE STRING "Minimum OS X deployment version")
-
-# cmake_policy(SET CMP0114 NEW)
-
 IF(APPLE)
- # uncomment this to build a universal binary for both platforms.
- # SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
+  SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14" CACHE STRING "Minimum OS X deployment version")
 ENDIF(APPLE)
 
-project(vutu)
+project(Vutu)
 
 #--------------------------------------------------------------------
 # Compiler flags
@@ -147,6 +143,7 @@ if(MSVC)
  set(ENABLE_STATIC_RUNTIME OFF CACHE INTERNAL "")
 endif()
 set(ENABLE_EXTERNAL_LIBS OFF CACHE INTERNAL "")
+set(ENABLE_MPEG OFF CACHE INTERNAL "")
 set(ENABLE_CPACK OFF CACHE INTERNAL "")
 set(ENABLE_PACKAGE_CONFIG OFF CACHE INTERNAL "")
 set(BUILD_TESTING OFF CACHE INTERNAL "")
@@ -170,18 +167,10 @@ add_library(${target} STATIC ${LIBRESAMPLE_SOURCES})
 target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
 
 #--------------------------------------------------------------------
-# set source groups for some source above
-#--------------------------------------------------------------------
-
-# source_group(mlvg-native REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/vg/native.*")
-# source_group(nanovg REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/external/nanovg/src.*|${MLVG_SOURCE_DIR}/external/MetalNanoVG/src.*")
-# source_group(nanosvg REGULAR_EXPRESSION "${MLVG_SOURCE_DIR}/external/nanosvg/src.*")
-
-#--------------------------------------------------------------------
 # make mlvg / SDL2 application target 
 #--------------------------------------------------------------------
 
-set(target vutu)
+set(target Vutu)
 
 create_resources (source/resources build/resources/vutu)
  
@@ -208,10 +197,22 @@ target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/extern
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/../loris/src" )
 
-# add SDL2
-find_package(SDL2 REQUIRED)
+# to link the SDL2 dynamic library, hopefully installed on the target system, do as follows:
+# find_package(SDL2 REQUIRED)
+# target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
+# target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
+
+# to build SDL2 from source and link statically, do as follows:
+# set( SDL_STATIC ON CACHE BOOL "" FORCE )
+# set( SDL_SHARED OFF CACHE BOOL "" FORCE )
+# add_subdirectory( source/external/SDL )
+# target_link_libraries(${target} PRIVATE SDL2main SDL2-static)
+
+# to use the SDL2 framework in /Library/Frameworks, do this:
+find_package(SDL2 REQUIRED COMPONENTS SDL2)
 target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
+message("SDL2 headers should be in: " ${SDL2_INCLUDE_DIRS} )
+
 
 # add madronalib library
 target_include_directories(${target} PRIVATE ${MADRONALIB_INCLUDE_DIR})
@@ -232,23 +233,26 @@ endif()
 # add mlvg library
 target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 if(APPLE)
-    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/lib${mlvg_NAME}.a")   
+    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/lib${mlvg_NAME}.a")
 elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/${mlvg_NAME}.lib")
 endif()
 
 # add other external libraries
-target_link_libraries(${target} PRIVATE mlvg SndFile::sndfile libresample)
+target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
 
 if(APPLE)
     # ARC must be off for juce
     target_compile_options(${target} PRIVATE "-fno-objc-arc")
+      
+    # set debug info format
+    set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
+    
+    # make macOS bundle
+    set_target_properties(${target} PROPERTIES MACOSX_BUNDLE TRUE)
     
     # build only active arch for Debug builds
     set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
-    
-    # set debug info format
-    set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
 endif()
  
 # set compiler options
@@ -262,6 +266,24 @@ elseif(WIN32)
     target_compile_options(${target} PRIVATE "/EHa") # standard C++ stack unwinding
 endif()
 
+
+# add the package info
+if(APPLE)
+    set_target_properties( 
+        ${target} PROPERTIES
+        # these settings allow the bundle version to be updated from the buildApp script.
+        # the stale version from when the XCode project was made will still appear in the
+        # project's "Custom macOS Application Target Properties."
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.madronalabs.vutu"
+        XCODE_ATTRIBUTE_INFOPLIST_FILE ${CMAKE_CURRENT_LIST_DIR}/source/mac/Info.plist
+        XCODE_ATTRIBUTE_INFOPLIST_PREPROCESS NO
+        )
+elseif(APPLE)
+    target_sources(${target} PRIVATE resource/vutu.rc)
+endif(APPLE)
+        
+message (STATUS "Info.plist source: ${CMAKE_CURRENT_LIST_DIR}/source/mac/Info.plist")
+
 target_compile_definitions(${target} PUBLIC "$<$<CONFIG:DEBUG>:DEBUG>")
 target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
 
@@ -269,20 +291,47 @@ target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
 # "other linker flags" in XCode and not in its file browser
 if(APPLE)
     target_link_libraries(${target} PRIVATE "-framework Cocoa" "-framework Metal" "-framework MetalKit"
-      "-framework CoreAudio" "-framework AppKit" "-framework UniformTypeIdentifiers")
-     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")   
+      "-framework CoreAudio" "-framework AppKit" "-framework SDL2" )
+     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")  
+     
+     # add SDL2 framework location to @runpath 
+set_target_properties( 
+     ${target} PROPERTIES
+     XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@loader_path/../Frameworks"
+     )
 elseif(WIN32)
     find_package(OpenGL REQUIRED)
     target_link_libraries(${target} PRIVATE ${OPENGL_gl_LIBRARY})
     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
 endif()
 
+# copy SDL2.framework into bundle and codesign it
 if(APPLE)
-    # build only active arch for Debug builds
-    set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH[variant=Debug] "YES")
 
-    # set debug info format
-    set_target_properties(${target} PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
-endif() 
+  set(APP_BUNDLE ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Vutu.app)
+  set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
+  
+  message("ENTITLEMENTS: " ${ENTITLEMENTS})
 
+  # source location of the SDL2 framework. Get the latest dmg from
+  # https://github.com/libsdl-org/SDL/releases and copy the .framework
+  # to this location.
+  SET(FRAMEWORK "/Library/Frameworks/SDL2.framework")
+  
+  add_custom_command(
+     TARGET ${target}
+     POST_BUILD
+     COMMAND ditto
+         "${FRAMEWORK}"
+         "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework"
+  )
 
+  # Add build target for codesigning the framework bundle
+  add_custom_command(TARGET ${target}
+      POST_BUILD
+      COMMAND codesign --force --sign "-" --entitlements ${ENTITLEMENTS} "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework/Versions/A"
+  )
+  
+  
+
+endif()

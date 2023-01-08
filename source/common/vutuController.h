@@ -47,6 +47,7 @@ public:
   
 private:
   
+
   sumu::Sample _sourceSample;
   sumu::Sample _synthesizedSample;
   float sourceDuration{0};
@@ -62,6 +63,8 @@ private:
 
   void saveTextToPath(const TextFragment& text, Path savePath);
 
+  void showAnalysisInfo();
+  
   void clearSourceSample();
   int _loadSampleFromDialog();
   int analyzeSample();
@@ -83,6 +86,7 @@ private:
   // file paths
   Path recentSamplesPath;
   Path recentPartialsPath;
+  File sourceFileLoaded;
   
   // analysis / resynthesis interval
   Interval sourceInterval{0, 0};

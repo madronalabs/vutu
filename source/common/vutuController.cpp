@@ -28,12 +28,10 @@
 using namespace ml;
 using namespace sumu;
 
-
 void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pSumu)
 {
   pSumu->partials.clear();
   for (const auto& partial : *pLoris) {
-    
     SumuPartial sp;
     for (auto it = partial.begin(); it != partial.end(); it++) {
       sp.time.push_back(it.time());
@@ -42,17 +40,12 @@ void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pS
       sp.bandwidth.push_back(it->bandwidth());
       sp.phase.push_back(it->phase());
     }
-    
     pSumu->partials.push_back(sp);
-    
   }
   
   pSumu->type = Symbol(kSumuPartialsFileType);
   pSumu->version = kSumuPartialsFileVersion;
-  
-  std::cout << "_lorisToSumuPartials: " << pSumu->partials.size() << " partials. \n ";
-  }
-
+}
 
 void _sumuToLorisPartials(const SumuPartialsData* pSumu, Loris::PartialList* pLoris)
 {
@@ -69,14 +62,8 @@ void _sumuToLorisPartials(const SumuPartialsData* pSumu, Loris::PartialList* pLo
       lp.insert(sp.time[i], b);
     }
     pLoris->push_back(lp);
-    
-    
   }
-  
-  std::cout << "_sumuToLorisPartials: " << pSumu->partials.size() << " partials. \n ";
-
 }
-
 
 //-----------------------------------------------------------------------------
 // VutuController implementation
@@ -216,7 +203,8 @@ int VutuController::loadSampleFromPath(Path samplePath)
       else
       {
         TextFragment truncatedMsg = (framesToRead == kMaxFrames) ? "(truncated)" : "";
-        readStatus = (TextFragment(textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg ));
+        TextFragment sampleRate(" sr = ", textUtils::naturalNumberToText(_sourceSample.sampleRate));
+        readStatus = (TextFragment(textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg, sampleRate ));
         OK = true;
       }
       
@@ -224,6 +212,8 @@ int VutuController::loadSampleFromPath(Path samplePath)
       sf_close(file);
     }
     
+    sourceFileLoaded = fileToLoad;
+
     // deinterleave to extract first channel if needed
     if(pData && fileInfo.channels > 1)
     {
@@ -241,6 +231,30 @@ int VutuController::loadSampleFromPath(Path samplePath)
     analysisInterval = {0.f, sourceDuration};
   }
   return OK;
+}
+
+TextFragment intToText(int i) { return textUtils::naturalNumberToText(i); }
+TextFragment floatToText(float f) { return textUtils::floatNumberToText(f); }
+
+void VutuController::showAnalysisInfo()
+{
+  SumuPartialsData* p = _sumuPartials.get();
+  
+  //TextFragment a(analysisInterval);
+  
+  //TextFragment a("analyzed ", p->stats.nPartials, ");
+                   
+  Path pathLoaded = sourceFileLoaded.getFullPath();
+  Path shortName = last(pathLoaded);
+  
+  TextFragment a(pathToText(shortName));
+  TextFragment b(" [", floatToText(analysisInterval.mX1), " -- " ,floatToText(analysisInterval.mX2), "] " );
+  TextFragment c("partials: ", intToText(p->stats.nPartials));
+  TextFragment d(" max freq: ", intToText(p->stats.freqRange.mX2));
+  TextFragment e(" max active: ", intToText(p->stats.maxActivePartials));
+
+  TextFragment out(a, b, c, d, e);
+  _printToConsole(out);
 }
 
 int VutuController::loadPartialsFromPath(Path partialsPath)
@@ -262,10 +276,9 @@ int VutuController::loadPartialsFromPath(Path partialsPath)
     }
     
     _sumuPartials->calcStats();
-    _partialsStatsText = _sumuPartials->getStatsText();
-    
+    showAnalysisInfo();
+     
     //std::cout << "text: " << partialsText << "\n";
-    
   }
   
   return OK;
@@ -428,9 +441,7 @@ void VutuController::saveTextToPath(const TextFragment& text, Path savePath)
 
 int VutuController::analyzeSample()
 {
-
   int status{ false };
-  std::cout << "VutuController::analyzing...";
   
   auto totalFrames = _sourceSample.data.size();
   if(!totalFrames) return status;
@@ -445,7 +456,6 @@ int VutuController::analyzeSample()
   
   int sr = _sourceSample.sampleRate;
   
-  // TEST
   auto res = getPlainValue(params, "resolution");
   auto width = getPlainValue(params, "window_width");
   auto drift = getPlainValue(params, "freq_drift");
@@ -467,19 +477,32 @@ int VutuController::analyzeSample()
   if(partialList_size(_lorisPartials.get()) > 0)
   {
     status = true;
+    
+    // convert loris partials to Sumu format and calculate stats
     _sumuPartials = std::make_unique< SumuPartialsData >();
     _lorisToSumuPartials(_lorisPartials.get(), _sumuPartials.get());
-    
     _sumuPartials->cutHighs(hiCut);
     _sumuPartials->cleanOutliers();
     _sumuPartials->calcStats();
-    _partialsStatsText = _sumuPartials->getStatsText();
+    showAnalysisInfo();
     
-    // convert back to loris partials after cleanup
+    // store analysis params used
+    _sumuPartials->resolution = res;
+    _sumuPartials->windowWidth = width;
+    _sumuPartials->ampFloor = floor;
+    _sumuPartials->freqDrift = drift;
+    _sumuPartials->loCut = loCut;
+    _sumuPartials->hiCut = hiCut;
+    
+    // convert back to loris partials after cutHighs (hack-ish)
     _sumuToLorisPartials(_sumuPartials.get(), _lorisPartials.get());
     
+    // add info
+    
+    Path pathLoaded = sourceFileLoaded.getFullPath();
+    Path shortName = last(pathLoaded);
+    _sumuPartials->sourceFile = pathToText(shortName);
   }
-
   return status;
 }
 

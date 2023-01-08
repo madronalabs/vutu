@@ -1,0 +1,9 @@
+
+Vutu change log
+-------------------------
+
+verson 0.9.3
+Jan 7, 2023
+
+- first public working version. 
+

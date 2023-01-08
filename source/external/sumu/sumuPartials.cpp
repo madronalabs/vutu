@@ -90,7 +90,7 @@ void SumuPartialsData::cleanOutliers()
   before = partials.size();
   partials.erase(std::remove_if(partials.begin(), partials.end(), discardPartial), partials.end());
   after = partials.size();
-  std::cout << "cleanup: before: " << before << ", after: " << after << "\n";
+  std::cout << "cleanOutliers: before: " << before << ", after: " << after << "\n";
 }
 
 
@@ -164,16 +164,6 @@ void SumuPartialsData::calcStats()
   stats.maxActiveTime = maxActiveTime;
   
   std::cout << "\n\n max active: " << stats.maxActivePartials <<  "at time: " << stats.maxActiveTime << "\n";
-}
-
-TextFragment SumuPartialsData::getStatsText()
-{
-  TextFragment nPartials;
-  
-  TextFragment freq;
- // TextFragment r(nPartials, maxPartials, freq, duration);
-  
-  return "OK";
 }
 
 // get an interpolated frame of data from the partial index p of the SumuPartialsData at time t.

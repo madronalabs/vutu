@@ -39,14 +39,14 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "window_width" },
     { "range", {16, 768} },
-    { "plaindefault", 256 },
+    { "plaindefault", 80 },
     { "log", true },
     { "units", "Hz" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "amp_floor" },
-    { "range", {-80, -20} },
+    { "range", {-90, -30} },
     { "plaindefault", -60 },
     { "units", "dB" }
   } ) );
@@ -54,7 +54,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "freq_drift" },
     { "range", {2, 200} },
-    { "plaindefault", 30 },
+    { "plaindefault", 100 },
     { "log", false },
     { "units", "Hz" }
   } ) );
@@ -70,7 +70,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "hi_cut" },
     { "range", {200, 20000} },
-    { "plaindefault", 10000 },
+    { "plaindefault", 20000 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -291,14 +291,12 @@ void VutuProcessor::onMessage(Message msg)
           _pSourceSampleInController = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
           
           int currentSampleRate = _processData.sampleRate;
-          std::cout << "VutuProcessor: sr = " << currentSampleRate << "\n";
-          std::cout << "    sample input: sr = " << _pSourceSampleInController->sampleRate << "\n";
+//          std::cout << "VutuProcessor: sr = " << currentSampleRate << "\n";
+  //        std::cout << "    sample input: sr = " << _pSourceSampleInController->sampleRate << "\n";
           
           // resample to current system sample rate for playback
           _sourceSample.sampleRate = currentSampleRate;
           
-          // TODO normalize there
-          // normalize(_pSourceSampleInController);
           resample(_pSourceSampleInController, &_sourceSample);
           break;
         }

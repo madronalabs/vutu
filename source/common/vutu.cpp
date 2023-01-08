@@ -14,8 +14,6 @@
 #include "vutuProcessor.h"
 #include "vutuController.h"
 
-#include <utu/utu.h>
-
 #include "MLSDLUtils.h"
 #include "nfd.h"
 
@@ -40,7 +38,7 @@ void vutuAppLoop(SDL_Window* window, bool* done, Path controllerName)
       SDL_Keycode sym = e.key.keysym.sym;
       uint16_t mod = e.key.keysym.mod;
       
-      std::cout << "sym: " << sym << ", mod: " << mod << "\n";
+      // std::cout << "sym: " << sym << ", mod: " << mod << "\n";
       
       switch(sym)
       {

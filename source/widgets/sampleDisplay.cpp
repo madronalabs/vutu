@@ -58,10 +58,6 @@ void SampleDisplay::receiveNamedRawPointer(Path name, void* ptr)
   {
     case(hash("sample")):
       _pSample = static_cast< const sumu::Sample* > (ptr);
-      
-      std::cout << "receiveNamedRawPointer: " << _pSample << "\n";
-      
-      std::cout << _pSample->data.size() << " frames.\n";
       _partialsDirty = true;
       break;
     default:
@@ -149,7 +145,7 @@ void SampleDisplay::paintSample(ml::DrawContext dc)
     
     auto roughEnd = high_resolution_clock::now();
     auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
-    std::cout << " sample painting time rough millis: " << roughMillisTotal << "\n";
+    // std::cout << " sample painting time rough millis: " << roughMillisTotal << "\n";
   }
   
   

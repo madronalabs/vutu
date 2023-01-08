@@ -109,10 +109,13 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
     
     // drawn amplidutes range from -60dB to max in partials
     auto ampRange = _pPartials->stats.ampRange;
-    ampRange.mX1 = dBToAmp(-60);
+    ampRange.mX1 = dBToAmp(-90);
     
-    Interval thicknessRange{0, h/16.f};
-    auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::unity);
+    Interval thicknessRange{h/512.f, h/32.f};
+    //auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::unity);
+    auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::exp(thicknessRange));
+
+    
     // projections::printTable(ampToThickness, "ampToThickness", ampRange, 5);
     auto bandwidthToUnity = projections::linear(_pPartials->stats.bandwidthRange, {0, 1});
     
@@ -159,17 +162,16 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
           
           // std::cout << "frame " << i << " bw " << bw << "\n";
           
-          float pathOpacity = colorOpacity + bw*(maxOpacity - colorOpacity);
+          float pathOpacity = 0.5f;//colorOpacity + bw*(maxOpacity - colorOpacity);
           
           
-          if(thickness < 2.f)
+          if(thickness < 1.f)
           {
-            //pathOpacity *= thickness;3
-            thickness = 2.f;
+            thickness = 1.f;
           }
           
           auto colorWithNoise = lerp(sineColor, noiseColor, bw);
-          auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);// rgba(1, 1, 1, opacity);
+          auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);
           
           float y1 = clamp(y - thickness/2.f, 0.f, float(h));
           float y2 = clamp(y + thickness/2.f, 0.f, float(h));
@@ -184,33 +186,19 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
       }
     }
     
-
     float maxAvgAmp = 0.f;
     float minAvgAmp = 100000.f;
         
     // draw spines
     auto spineColor(rgba(0, 1, 1, 1));
-    nvgStrokeWidth(nvg, 1); // TEMP
-//    nvgStrokeColor(nvg, multiplyAlpha(spineColor, 0.5));
-//    nvgBeginPath(nvg);
+    nvgStrokeWidth(nvg, 2); // TEMP
+    nvgStrokeColor(nvg, multiplyAlpha(spineColor, 0.5));
+    nvgBeginPath(nvg);
     for(int p=0; p<nPartials; ++p)
     {
       const auto& partial = _pPartials->partials[p];
       size_t framesInPartial = partial.time.size();
       
-      // get average amp
-      float totalAmp = 0.f;
-      for(int i = 0; i < framesInPartial; ++i)
-      {
-        auto frame = getPartialFrameByIndex(*_pPartials, p, i);
-        totalAmp += _pPartials->partials[p].amp[i];
-      }
-      
-      float avgAmp = totalAmp / framesInPartial;
-      if(avgAmp > maxAvgAmp) {maxAvgAmp = avgAmp;}
-      if(avgAmp < minAvgAmp) {minAvgAmp = avgAmp;}
-      float spineOpacity = 1.0f;//std::clamp(avgAmp * 50.f, 0.25f, 1.0f);
-      nvgStrokeColor(nvg, multiplyAlpha(spineColor, spineOpacity));
       for(int i = 0; i < framesInPartial; ++i)
       {
         auto frame = getPartialFrameByIndex(*_pPartials, p, i);
@@ -219,7 +207,7 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
         
         if(i == 0)
         {
-          nvgBeginPath(nvg);
+          //nvgBeginPath(nvg);
           nvgMoveTo(nvg, x, y);
         }
         else if(i < framesInPartial - 1)
@@ -228,17 +216,18 @@ void SumuPartialsDisplay::paintPartials(ml::DrawContext dc)
         }
         else
         {
-          nvgStroke(nvg);
+          //nvgStroke(nvg);
         }
       }
-    }
 
+    }
+    nvgStroke(nvg);
     
     std::cout << "\n min avg ampL: " << minAvgAmp << " max avg amp: " << maxAvgAmp << "\n";
 
     auto roughEnd = high_resolution_clock::now();
     auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
-    std::cout << "partials painting time rough millis: " << roughMillisTotal << "\n";
+    // std::cout << "partials painting time rough millis: " << roughMillisTotal << "\n";
     
   
   }
