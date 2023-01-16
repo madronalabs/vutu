@@ -11,7 +11,7 @@
 #include "MLResizer.h"
 #include "MLTextLabelBasic.h"
 #include "MLSVGImage.h"
-#include "MLSVGButton.h"
+#include "MLSVGButtonBasic.h"
 
 #include "MLParameters.h"
 #include "MLSerialization.h"
