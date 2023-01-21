@@ -13,8 +13,7 @@
 #include "MLRtAudioProcessor.h"
 #include "MLActor.h"
 #include "MLMath2D.h"
-
-#include "sumuDSP.h"
+#include "MLDSPSignal.h"
 
 #include "loris.h"
 
@@ -55,9 +54,9 @@ private:
   
   Interval analysisInterval{0, 0};
   
-  sumu::Sample* _pSourceSampleInController{nullptr};
-  sumu::Sample _sourceSample;
-  sumu::Sample* _pSynthesizedSample{nullptr};
+  ml::Signal* _pSourceSampleInController{nullptr};
+  ml::Signal _sourceSample;
+  ml::Signal* _pSynthesizedSample{nullptr};
 
 
   Loris::PartialList* _pLorisPartials{ nullptr };

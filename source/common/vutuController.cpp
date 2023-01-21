@@ -14,7 +14,7 @@
 #include <chrono>
 
 #include "MLSerialization.h"
-#include "sumuPartials.h"
+#include "vutuPartials.h"
 
 #include "mlvg.h"
 #include "miniz.h"
@@ -26,13 +26,12 @@
 #include "Synthesizer.h"
 
 using namespace ml;
-using namespace sumu;
 
-void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pSumu)
+void _lorisToVutuPartials(const Loris::PartialList* pLoris, VutuPartialsData* pSumu)
 {
   pSumu->partials.clear();
   for (const auto& partial : *pLoris) {
-    SumuPartial sp;
+    VutuPartial sp;
     for (auto it = partial.begin(); it != partial.end(); it++) {
       sp.time.push_back(it.time());
       sp.freq.push_back(it->frequency());
@@ -43,16 +42,16 @@ void _lorisToSumuPartials(const Loris::PartialList* pLoris, SumuPartialsData* pS
     pSumu->partials.push_back(sp);
   }
   
-  pSumu->type = Symbol(kSumuPartialsFileType);
-  pSumu->version = kSumuPartialsFileVersion;
+  pSumu->type = Symbol(kVutuPartialsFileType);
+  pSumu->version = kVutuPartialsFileVersion;
 }
 
-void _sumuToLorisPartials(const SumuPartialsData* pSumu, Loris::PartialList* pLoris)
+void _sumuToLorisPartials(const VutuPartialsData* pSumu, Loris::PartialList* pLoris)
 {
   pLoris->clear();
     
   for (auto it = pSumu->partials.begin(); it != pSumu->partials.end(); it++) {
-    const SumuPartial& sp = *it;
+    const VutuPartial& sp = *it;
     Loris::Partial lp;
 
     size_t nBreakpoints = sp.time.size();
@@ -93,6 +92,7 @@ void VutuController::setButtonEnableStates()
   sendMessageToActor(_viewName, {"widget/export/set_prop/enabled", partialsOK});
   
   sendMessageToActor(_viewName, {"widget/play_synth/set_prop/enabled", (_synthesizedSample.data.size() > 0)});
+  sendMessageToActor(_viewName, {"widget/export_synth/set_prop/enabled", (_synthesizedSample.data.size() > 0)});
 }
 
 void VutuController::_debug()
@@ -110,15 +110,15 @@ void VutuController::_printToConsole(TextFragment t)
 
 void VutuController::clearSourceSample()
 {
-  _sourceSample.clear();
+  clear(_sourceSample);
 }
 
 
 void VutuController::broadcastSourceSample()
 {
   // send synthesized audio to View and Processor
-  sumu::Sample* pSample = &_sourceSample;
-  Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
+  ml::Signal* pSample = &_sourceSample;
+  Value samplePtrValue(&pSample, sizeof(ml::Signal*));
   sendMessageToActor(_processorName, {"do/set_source_data", samplePtrValue});
   sendMessageToActor(_viewName, {"do/set_source_data", samplePtrValue});
 }
@@ -126,29 +126,29 @@ void VutuController::broadcastSourceSample()
 void VutuController::_clearPartialsData()
 {
   // clear data
-  _sumuPartials = std::make_unique< SumuPartialsData >();
+  _vutuPartials = std::make_unique< VutuPartialsData >();
   _lorisPartials = std::make_unique< Loris::PartialList >();
 }
 
 void VutuController::broadcastPartialsData()
 {
   // send Partials to View and Processor
-  SumuPartialsData* pPartials = _sumuPartials.get();
-  Value partialsPtrValue(&pPartials, sizeof(SumuPartialsData*));
+  VutuPartialsData* pPartials = _vutuPartials.get();
+  Value partialsPtrValue(&pPartials, sizeof(VutuPartialsData*));
   sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
   sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
 }
 
 void VutuController::_clearSynthesizedSample()
 {
-  _synthesizedSample.clear();
+  clear(_synthesizedSample);
 }
 
 void VutuController::broadcastSynthesizedSample()
 {
   // send synthesized audio to View and Processor
-  sumu::Sample* pSample = &_synthesizedSample;
-  Value samplePtrValue(&pSample, sizeof(sumu::Sample*));
+  ml::Signal* pSample = &_synthesizedSample;
+  Value samplePtrValue(&pSample, sizeof(ml::Signal*));
   sendMessageToActor(_processorName, {"do/set_synth_data", samplePtrValue});
   sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
 }
@@ -159,8 +159,39 @@ void VutuController::syncIntervals()
   sendMessageToActor(_processorName, {"do/set_interval_end", analysisInterval.mX2});
   sendMessageToActor(_viewName, {"do/set_interval_start", analysisInterval.mX1});
   sendMessageToActor(_viewName, {"do/set_interval_end", analysisInterval.mX2});
-  
   sendMessageToActor(_viewName, {"do/set_source_duration", sourceDuration});
+}
+
+int VutuController::saveSignalToWavFile(const Signal& signal, Path wavPath)
+{
+  int OK{ false };
+  std::cout << "file to save: " << wavPath << "\n";
+  
+  SNDFILE* sndfile;
+  SF_INFO* sf_info;
+
+  
+  sf_info = (SF_INFO *) malloc(sizeof(SF_INFO));
+  sf_info->samplerate = signal.sampleRate;
+  sf_info->channels = 1;
+  sf_info->format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+  
+  sndfile = sf_open(pathToText(wavPath).getText(), SFM_WRITE, sf_info);
+
+  // write samples
+  // mono only, for now!
+  size_t frames = _synthesizedSample.data.size();
+  auto writeResult = sf_writef_float(sndfile, _synthesizedSample.data.data(), frames);
+  if(writeResult == frames)
+  {
+    OK = true;
+  }
+  
+  /* Close sound file and return */
+  sf_close(sndfile);
+
+  
+  return OK;
 }
 
 int VutuController::loadSampleFromPath(Path samplePath)
@@ -224,7 +255,7 @@ int VutuController::loadSampleFromPath(Path samplePath)
       _sourceSample.data.resize(framesRead);
     }
     
-    _sourceSample.normalize();
+    normalize(_sourceSample);
     
     // set source duration and reset analysis interval to whole source length
     sourceDuration = framesRead/float(_sourceSample.sampleRate);
@@ -238,7 +269,7 @@ TextFragment floatToText(float f) { return textUtils::floatNumberToText(f); }
 
 void VutuController::showAnalysisInfo()
 {
-  SumuPartialsData* p = _sumuPartials.get();
+  VutuPartialsData* p = _vutuPartials.get();
   
   //TextFragment a(analysisInterval);
   
@@ -266,16 +297,14 @@ int VutuController::loadPartialsFromPath(Path partialsPath)
     TextFragment partialsText;
     fileToLoad.loadAsText(partialsText);
     
-    // to implement!
     auto partialsJSON = textToJSON(partialsText);
-    if(SumuPartialsData* newPartials = jsonToSumuPartials(partialsJSON))
+    if(VutuPartialsData* newPartials = jsonToVutuPartials(partialsJSON))
     {
-      // transfer ownership of new partials to _sumuPartials and delete previous
-      _sumuPartials = std::unique_ptr<SumuPartialsData>(newPartials);
+      // transfer ownership of new partials to _vutuPartials and delete previous
+      _vutuPartials = std::unique_ptr<VutuPartialsData>(newPartials);
       OK = true;
     }
     
-    _sumuPartials->calcStats();
     showAnalysisInfo();
      
     //std::cout << "text: " << partialsText << "\n";
@@ -322,7 +351,7 @@ Path VutuController::showLoadDialog(Symbol fileType)
         defaultLocation = File(getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
       }
       auto defaultPathText = defaultLocation.getFullPathAsText();
-      nfdfilteritem_t filterItem[1] = { { "JSON data", "json" } }; // can add compressed JSON here
+      nfdfilteritem_t filterItem[1] = { { "JSON data", "utu" } }; // can add compressed JSON here
       result = NFD_OpenDialog(&outPath, filterItem, 1, defaultPathText.getText());
       break;
     }
@@ -360,17 +389,33 @@ Path VutuController::showLoadDialog(Symbol fileType)
   return returnVal;
 }
 
-Path VutuController::showSaveDialog()
+
+TextFragment extensionForFileType(Symbol fileType)
+{
+  TextFragment r;
+  switch(hash(fileType))
+  {
+    case(hash("partials")):
+      r = "utu";
+      break;
+    case(hash("audio")):
+      r = "wav";
+      break;
+  }
+  return r;
+}
+
+Path VutuController::showSaveDialog(Symbol fileType)
 {
   Path returnVal{};
-  File partialsRoot(getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
+  File fileTypeRoot(getApplicationDataRoot(getMakerName(), getAppName(), fileType));
   
-  std::cout << "partials dir: " << partialsRoot.getFullPathAsText() << "\n";
+  std::cout << "root dir: " << fileTypeRoot.getFullPathAsText() << "\n";
   
-  if(!partialsRoot.exists())
+  if(!fileTypeRoot.exists())
   {
     // make directory
-    Symbol r = partialsRoot.createDirectory();
+    Symbol r = fileTypeRoot.createDirectory();
     if(r != "OK")
     {
       // TODO present error
@@ -378,23 +423,24 @@ Path VutuController::showSaveDialog()
     }
   }
   
-  if(partialsRoot.exists())
+  if(fileTypeRoot.exists())
   {
-    auto partialsRootText = partialsRoot.getFullPathAsText();
+    auto rootText = fileTypeRoot.getFullPathAsText();
     
     nfdchar_t* savePathAsString;
     Path savePath;
     
     Path currentPath = "default";//textToPath(_params["current_patch"].getTextValue());
     Symbol currentName = last(currentPath);
-    TextFragment defaultName (currentName.getTextFragment(), ".json");
+    auto ext =  extensionForFileType(fileType);
+    TextFragment defaultName (currentName.getTextFragment());
     
     // prepare filters for the dialog
     const int nFilters = 1;
-    nfdfilteritem_t filterItem[nFilters] = {{"Sumu partials", "json"}};
+    nfdfilteritem_t filterItem[nFilters] = {{fileType.getTextFragment().getText(), ext.getText()}};
     
     // show the dialog
-    nfdresult_t result = NFD_SaveDialog(&savePathAsString, filterItem, nFilters, partialsRootText.getText(), defaultName.getText());
+    nfdresult_t result = NFD_SaveDialog(&savePathAsString, filterItem, nFilters, rootText.getText(), defaultName.getText());
     if (result == NFD_OKAY)
     {
       puts(savePathAsString);
@@ -479,29 +525,29 @@ int VutuController::analyzeSample()
     status = true;
     
     // convert loris partials to Sumu format and calculate stats
-    _sumuPartials = std::make_unique< SumuPartialsData >();
-    _lorisToSumuPartials(_lorisPartials.get(), _sumuPartials.get());
-    _sumuPartials->cutHighs(hiCut);
-    _sumuPartials->cleanOutliers();
-    _sumuPartials->calcStats();
+    _vutuPartials = std::make_unique< VutuPartialsData >();
+    _lorisToVutuPartials(_lorisPartials.get(), _vutuPartials.get());
+    cutHighs(*_vutuPartials, hiCut);
+    cleanOutliers(*_vutuPartials);
+    calcStats(*_vutuPartials);
     showAnalysisInfo();
     
     // store analysis params used
-    _sumuPartials->resolution = res;
-    _sumuPartials->windowWidth = width;
-    _sumuPartials->ampFloor = floor;
-    _sumuPartials->freqDrift = drift;
-    _sumuPartials->loCut = loCut;
-    _sumuPartials->hiCut = hiCut;
+    _vutuPartials->resolution = res;
+    _vutuPartials->windowWidth = width;
+    _vutuPartials->ampFloor = floor;
+    _vutuPartials->freqDrift = drift;
+    _vutuPartials->loCut = loCut;
+    _vutuPartials->hiCut = hiCut;
     
     // convert back to loris partials after cutHighs (hack-ish)
-    _sumuToLorisPartials(_sumuPartials.get(), _lorisPartials.get());
+    _sumuToLorisPartials(_vutuPartials.get(), _lorisPartials.get());
     
     // add info
     
     Path pathLoaded = sourceFileLoaded.getFullPath();
     Path shortName = last(pathLoaded);
-    _sumuPartials->sourceFile = pathToText(shortName);
+    _vutuPartials->sourceFile = pathToText(shortName);
   }
   return status;
 }
@@ -550,7 +596,7 @@ void VutuController::synthesize()
     _synthesizedSample.data[i] = 0.f;
   }
 
-  _synthesizedSample.normalize();
+  normalize(_synthesizedSample);
   _synthesizedSample.sampleRate = params.sampleRate;
 }
 
@@ -628,6 +674,21 @@ void VutuController::onMessage(Message m)
           messageHandled = true;
           break;
         }
+        case(hash("export_synth")):
+        {
+          // save synthesized audio to a file
+          bool audioOK = (_synthesizedSample.data.size() > 0);
+          if(audioOK)
+          {
+            if(auto savePath = showSaveDialog("audio"))
+            {
+              File saveFile (savePath);
+              saveSignalToWavFile(_synthesizedSample, savePath);
+            }
+          }
+          messageHandled = true;
+          break;
+        }
         case(hash("analyze")):
         {
           _clearPartialsData();
@@ -687,13 +748,13 @@ void VutuController::onMessage(Message m)
         }
         case(hash("export")):
         {
-          SumuPartialsData* pPartials = _sumuPartials.get();
+          VutuPartialsData* pPartials = _vutuPartials.get();
           bool partialsOK = pPartials && (pPartials->partials.size() > 0);
           if(partialsOK)
           {
-            if(auto savePath = showSaveDialog())
+            if(auto savePath = showSaveDialog("partials"))
             {
-              auto partialsJson = sumuPartialsToJSON(*pPartials);
+              auto partialsJson = vutuPartialsToJSON(*pPartials);
               auto partialsText = JSONToText(partialsJson);
               File saveFile (savePath);
               saveTextToPath(partialsText, savePath);
@@ -711,7 +772,7 @@ void VutuController::onMessage(Message m)
             {
               // convert to Loris partials so we can use Loris to synthesize output
               _lorisPartials = std::make_unique< Loris::PartialList >();
-              _sumuToLorisPartials(_sumuPartials.get(), _lorisPartials.get() );
+              _sumuToLorisPartials(_vutuPartials.get(), _lorisPartials.get() );
               
               // clear source sample so all data is consistent
               clearSourceSample();
@@ -724,7 +785,7 @@ void VutuController::onMessage(Message m)
               setButtonEnableStates();
               
               // set interval to whole partials file and broadcast
-              analysisInterval = {_sumuPartials->stats.timeRange.mX1, _sumuPartials->stats.timeRange.mX2};
+              analysisInterval = {_vutuPartials->stats.timeRange.mX1, _vutuPartials->stats.timeRange.mX2};
               syncIntervals();
             }
           }

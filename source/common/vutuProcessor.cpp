@@ -19,7 +19,6 @@
 #include "Synthesizer.h"
 
 using namespace ml;
-using namespace sumu;
 
 constexpr float kSizeLo = 0, kSizeHi = 40;
 constexpr float kToneLo = 250, kToneHi = 4000;
@@ -46,15 +45,15 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "amp_floor" },
-    { "range", {-90, -30} },
+    { "range", {-90, -20} },
     { "plaindefault", -60 },
     { "units", "dB" }
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "freq_drift" },
-    { "range", {2, 200} },
-    { "plaindefault", 100 },
+    { "range", {2, 80} },
+    { "plaindefault", 40 },
     { "log", false },
     { "units", "Hz" }
   } ) );
@@ -85,8 +84,8 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 }
 
 
-void resample(const Sample* pSrc, Sample* pDest)
-  {
+void resample(const ml::Signal* pSrc, ml::Signal* pDest)
+{
   int srcLen = pSrc->data.size();
   double factor = double(pDest->sampleRate) / double(pSrc->sampleRate);
     
@@ -181,7 +180,7 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
  // std::cout << "gain: " << gain << "\n";
   DSPVector sampleVec;
   
-  sumu::Sample* samplePlaying{ nullptr };
+  ml::Signal* samplePlaying{ nullptr };
   Symbol viewProperty;
   if(playbackState == "source")
   {
@@ -288,7 +287,7 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          _pSourceSampleInController = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
+          _pSourceSampleInController = *reinterpret_cast<ml::Signal**>(msg.value.getBlobValue());
           
           int currentSampleRate = _processData.sampleRate;
 //          std::cout << "VutuProcessor: sr = " << currentSampleRate << "\n";
@@ -322,7 +321,7 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          _pSynthesizedSample = *reinterpret_cast<sumu::Sample**>(msg.value.getBlobValue());
+          _pSynthesizedSample = *reinterpret_cast<ml::Signal**>(msg.value.getBlobValue());
 
           break;
         }

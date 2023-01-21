@@ -57,7 +57,7 @@ void SampleDisplay::receiveNamedRawPointer(Path name, void* ptr)
   switch(hash(head(name)))
   {
     case(hash("sample")):
-      _pSample = static_cast< const sumu::Sample* > (ptr);
+      _pSample = static_cast< const ml::Signal* > (ptr);
       _partialsDirty = true;
       break;
     default:

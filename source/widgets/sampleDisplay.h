@@ -5,9 +5,9 @@
 
 #pragma once
 
+#include "MLDSPSignal.h"
 #include "mlvg.h"
-#include "sumuPartials.h"
-#include "sumuDSP.h"
+#include "vutuPartials.h"
 
 using namespace ml;
 
@@ -19,7 +19,7 @@ class SampleDisplay : public Widget
   bool _partialsDirty{ false };
 
   std::unique_ptr< Layer > _backingLayer;
-  const sumu::Sample * _pSample{nullptr};
+  const ml::Signal * _pSample{nullptr};
   ml::DrawContext _prevDC{nullptr};
   
   float _playbackTime{0};

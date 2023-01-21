@@ -177,14 +177,11 @@ create_resources (source/resources build/resources/vutu)
 file(GLOB COMMON_SOURCES "${CMAKE_SOURCE_DIR}/source/common/*.cpp")
 file(GLOB COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/source/common/*.h")
 
-file(GLOB SUMU_SOURCES "${CMAKE_SOURCE_DIR}/source/external/sumu/*.cpp")
-file(GLOB SUMU_INCLUDES "${CMAKE_SOURCE_DIR}/source/external/sumu/*.h")
-
 file(GLOB WIDGETS_SOURCES "${CMAKE_SOURCE_DIR}/source/widgets/*.cpp")
 file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
 
-list(APPEND app_sources ${COMMON_SOURCES} ${SUMU_SOURCES} ${WIDGETS_SOURCES} )
-list(APPEND app_sources ${COMMON_INCLUDES} ${SUMU_INCLUDES} ${WIDGETS_INCLUDES} )
+list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} )
+list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} )
 
 add_executable(${target} ${app_sources})
 

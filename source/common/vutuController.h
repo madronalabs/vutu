@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "MLDSPSignal.h"
 #include "MLFiles.h"
 #include "MLPropertyTree.h"
 #include "MLAppController.h"
@@ -12,8 +13,7 @@
 #include "vutuProcessor.h"
 #include "vutuView.h"
 
-#include "sumuDSP.h"
-#include "sumuPartials.h"
+#include "vutuPartials.h"
 
 #include "sndfile.hh"
 
@@ -46,18 +46,19 @@ public:
 
   
 private:
-  
 
-  sumu::Sample _sourceSample;
-  sumu::Sample _synthesizedSample;
+  ml::Signal _sourceSample;
+  ml::Signal _synthesizedSample;
   float sourceDuration{0};
 
   std::unique_ptr< Loris::PartialList > _lorisPartials;
-  std::unique_ptr< SumuPartialsData > _sumuPartials;
+  std::unique_ptr< VutuPartialsData > _vutuPartials;
 
   Path showLoadDialog(Symbol fileType);
 
-  Path showSaveDialog();
+  Path showSaveDialog(Symbol fileType);
+  int saveSignalToWavFile(const Signal& signal, Path wavPath);
+
   int loadSampleFromPath(Path samplePath);
   int loadPartialsFromPath(Path samplePath);
 

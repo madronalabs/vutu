@@ -16,14 +16,13 @@
 #include "MLParameters.h"
 #include "MLSerialization.h"
 
-#include "sumuPartialsDisplay.h"
+#include "vutuPartialsDisplay.h"
 #include "sampleDisplay.h"
 
 #include "vutuProcessor.h"
 
 #include "../build/resources/vutu/resources.c"
 
-using namespace sumu;
 
 ml::Rect smallDialRect{0, 0, 1.0, 1.0};
 ml::Rect mediumDialRect{0, 0, 1.5, 1.5};
@@ -54,6 +53,8 @@ void VutuView::layoutView(DrawContext dc)
   // set grid size of entire view, for background and other drawing
   _view->setProperty("grid_units_x", gx);
   _view->setProperty("grid_units_y", gy);
+  
+  if(!_view->_widgets.size()) return;
   
   const int bottomHeight{7};
   int bottomY = gy - bottomHeight;
@@ -120,6 +121,7 @@ void VutuView::layoutView(DrawContext dc)
   _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX3, buttonsY2}));
 
   _view->_widgets["play_synth"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX1, buttonsY3}));
+  _view->_widgets["export_synth"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX2, buttonsY3}));
   
   // other labels
   ml::Rect otherLabelsRect(0, 0, 2, 1);
@@ -268,15 +270,19 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     {"text", "import" },
     {"action", "import" }
   } );
-  _view->_widgets.add_unique< TextButtonBasic >("play_synth", WithValues{
-    {"text", "play" },
-    {"action", "toggle_play_synth" }
-  } );
   _view->_widgets.add_unique< TextButtonBasic >("export", WithValues{
     {"text", "export" },
     {"action", "export" }
   } );
-  
+  _view->_widgets.add_unique< TextButtonBasic >("play_synth", WithValues{
+    {"text", "play" },
+    {"action", "toggle_play_synth" }
+  } );
+  _view->_widgets.add_unique< TextButtonBasic >("export_synth", WithValues{
+    {"text", "export" },
+    {"action", "export_synth" }
+  } );
+
   // info label
   _view->_widgets.add_unique< TextLabelBasic >("info", WithValues{
     { "h_align", "center" },
@@ -292,7 +298,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   } );
   
   // partials
-  _view->_widgets.add_unique< SumuPartialsDisplay >("partials", WithValues{
+  _view->_widgets.add_unique< VutuPartialsDisplay >("partials", WithValues{
   } );
   
   // synth (synthesized sample)
@@ -313,6 +319,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   _view->_widgets["analyze"]->setProperty("enabled", false);
   _view->_widgets["export"]->setProperty("enabled", false);
   _view->_widgets["play_synth"]->setProperty("enabled", false);
+  _view->_widgets["export_synth"]->setProperty("enabled", false);
 
   _setupWidgets(pdl);
 }
@@ -374,7 +381,7 @@ void VutuView::onMessage(Message msg)
         case(hash("set_source_data")):
         {
           // get Sample pointer
-          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
+          Signal* pSample = *reinterpret_cast<Signal**>(msg.value.getBlobValue());
           _view->_widgets["source"]->receiveNamedRawPointer("sample", pSample);
           
           break;
@@ -383,7 +390,7 @@ void VutuView::onMessage(Message msg)
         case(hash("set_partials_data")):
         {
           // get Partials data pointer
-          SumuPartialsData* pPartials = *reinterpret_cast<SumuPartialsData**>(msg.value.getBlobValue());
+          VutuPartialsData* pPartials = *reinterpret_cast<VutuPartialsData**>(msg.value.getBlobValue());
           _view->_widgets["partials"]->receiveNamedRawPointer("partials", pPartials);
           
           break;
@@ -391,8 +398,8 @@ void VutuView::onMessage(Message msg)
           
         case(hash("set_synth_data")):
         {
-          // get Sample pointer
-          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
+          // get Signal pointer
+          Signal* pSample = *reinterpret_cast<Signal**>(msg.value.getBlobValue());
           _view->_widgets["synth"]->receiveNamedRawPointer("sample", pSample);
           
           break;
