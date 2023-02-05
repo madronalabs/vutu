@@ -84,7 +84,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 }
 
 
-void resample(const ml::Signal* pSrc, ml::Signal* pDest)
+void resample(const ml::Sample* pSrc, ml::Sample* pDest)
 {
   int srcLen = pSrc->data.size();
   double factor = double(pDest->sampleRate) / double(pSrc->sampleRate);
@@ -180,7 +180,7 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
  // std::cout << "gain: " << gain << "\n";
   DSPVector sampleVec;
   
-  ml::Signal* samplePlaying{ nullptr };
+  ml::Sample* samplePlaying{ nullptr };
   Symbol viewProperty;
   if(playbackState == "source")
   {
@@ -287,7 +287,7 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          _pSourceSampleInController = *reinterpret_cast<ml::Signal**>(msg.value.getBlobValue());
+          _pSourceSampleInController = *reinterpret_cast<ml::Sample**>(msg.value.getBlobValue());
           
           int currentSampleRate = _processData.sampleRate;
 //          std::cout << "VutuProcessor: sr = " << currentSampleRate << "\n";
@@ -321,7 +321,7 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          _pSynthesizedSample = *reinterpret_cast<ml::Signal**>(msg.value.getBlobValue());
+          _pSynthesizedSample = *reinterpret_cast<ml::Sample**>(msg.value.getBlobValue());
 
           break;
         }

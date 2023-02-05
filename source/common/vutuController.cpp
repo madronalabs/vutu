@@ -117,8 +117,8 @@ void VutuController::clearSourceSample()
 void VutuController::broadcastSourceSample()
 {
   // send synthesized audio to View and Processor
-  ml::Signal* pSample = &_sourceSample;
-  Value samplePtrValue(&pSample, sizeof(ml::Signal*));
+  ml::Sample* pSample = &_sourceSample;
+  Value samplePtrValue(&pSample, sizeof(ml::Sample*));
   sendMessageToActor(_processorName, {"do/set_source_data", samplePtrValue});
   sendMessageToActor(_viewName, {"do/set_source_data", samplePtrValue});
 }
@@ -147,8 +147,8 @@ void VutuController::_clearSynthesizedSample()
 void VutuController::broadcastSynthesizedSample()
 {
   // send synthesized audio to View and Processor
-  ml::Signal* pSample = &_synthesizedSample;
-  Value samplePtrValue(&pSample, sizeof(ml::Signal*));
+  ml::Sample* pSample = &_synthesizedSample;
+  Value samplePtrValue(&pSample, sizeof(ml::Sample*));
   sendMessageToActor(_processorName, {"do/set_synth_data", samplePtrValue});
   sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
 }
@@ -162,7 +162,7 @@ void VutuController::syncIntervals()
   sendMessageToActor(_viewName, {"do/set_source_duration", sourceDuration});
 }
 
-int VutuController::saveSignalToWavFile(const Signal& signal, Path wavPath)
+int VutuController::saveSampleToWavFile(const Sample& sample, Path wavPath)
 {
   int OK{ false };
   std::cout << "file to save: " << wavPath << "\n";
@@ -172,7 +172,7 @@ int VutuController::saveSignalToWavFile(const Signal& signal, Path wavPath)
 
   
   sf_info = (SF_INFO *) malloc(sizeof(SF_INFO));
-  sf_info->samplerate = signal.sampleRate;
+  sf_info->samplerate = sample.sampleRate;
   sf_info->channels = 1;
   sf_info->format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
   
@@ -683,7 +683,7 @@ void VutuController::onMessage(Message m)
             if(auto savePath = showSaveDialog("audio"))
             {
               File saveFile (savePath);
-              saveSignalToWavFile(_synthesizedSample, savePath);
+              saveSampleToWavFile(_synthesizedSample, savePath);
             }
           }
           messageHandled = true;

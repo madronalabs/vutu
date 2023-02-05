@@ -381,7 +381,7 @@ void VutuView::onMessage(Message msg)
         case(hash("set_source_data")):
         {
           // get Sample pointer
-          Signal* pSample = *reinterpret_cast<Signal**>(msg.value.getBlobValue());
+          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
           _view->_widgets["source"]->receiveNamedRawPointer("sample", pSample);
           
           break;
@@ -398,8 +398,8 @@ void VutuView::onMessage(Message msg)
           
         case(hash("set_synth_data")):
         {
-          // get Signal pointer
-          Signal* pSample = *reinterpret_cast<Signal**>(msg.value.getBlobValue());
+          // get Sample pointer
+          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
           _view->_widgets["synth"]->receiveNamedRawPointer("sample", pSample);
           
           break;

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "MLDSPSignal.h"
+#include "MLDSPSample.h"
 #include "MLFiles.h"
 #include "MLPropertyTree.h"
 #include "MLAppController.h"
@@ -47,8 +47,8 @@ public:
   
 private:
 
-  ml::Signal _sourceSample;
-  ml::Signal _synthesizedSample;
+  ml::Sample _sourceSample;
+  ml::Sample _synthesizedSample;
   float sourceDuration{0};
 
   std::unique_ptr< Loris::PartialList > _lorisPartials;
@@ -57,7 +57,7 @@ private:
   Path showLoadDialog(Symbol fileType);
 
   Path showSaveDialog(Symbol fileType);
-  int saveSignalToWavFile(const Signal& signal, Path wavPath);
+  int saveSampleToWavFile(const ml::Sample& signal, Path wavPath);
 
   int loadSampleFromPath(Path samplePath);
   int loadPartialsFromPath(Path samplePath);

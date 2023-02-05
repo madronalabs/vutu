@@ -13,7 +13,7 @@
 #include "MLRtAudioProcessor.h"
 #include "MLActor.h"
 #include "MLMath2D.h"
-#include "MLDSPSignal.h"
+#include "MLDSPSample.h"
 
 #include "loris.h"
 
@@ -54,9 +54,9 @@ private:
   
   Interval analysisInterval{0, 0};
   
-  ml::Signal* _pSourceSampleInController{nullptr};
-  ml::Signal _sourceSample;
-  ml::Signal* _pSynthesizedSample{nullptr};
+  ml::Sample* _pSourceSampleInController{nullptr};
+  ml::Sample _sourceSample;
+  ml::Sample* _pSynthesizedSample{nullptr};
 
 
   Loris::PartialList* _pLorisPartials{ nullptr };

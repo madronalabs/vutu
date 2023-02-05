@@ -5,32 +5,42 @@
 
 #pragma once
 
-#include "MLDSPSample.h"
 #include "mlvg.h"
 #include "vutuPartials.h"
 
 using namespace ml;
 
-class SampleDisplay : public Widget
+class VutuPartialsDisplay : public Widget
 {
-  void paintSample(ml::DrawContext dc);
+  void paintPartials(ml::DrawContext dc);
 
   bool _initialized{ false };
-  bool _partialsDirty{ false };
+  bool _partialsDirty{ true };
 
+  
   std::unique_ptr< Layer > _backingLayer;
-  const ml::Sample * _pSample{nullptr};
+  
+  const VutuPartialsData * _pPartials{nullptr};
+  
+
   ml::DrawContext _prevDC{nullptr};
   
-  float _playbackTime{0};
-  
 public:
-  SampleDisplay(WithValues p) : Widget(p) {}
+  
+  virtual void handleMessage(Message msg, Message* r) override
+  {
+    std::cout << "partialsDisplay got message: " <<  msg << "\n";
+    Widget::handleMessage(msg, r);
+  }
+  
+  VutuPartialsDisplay(WithValues p) : Widget(p) {}
 
   // Widget implementation
   void resize(ml::DrawContext d) override;
   MessageList animate(int elapsedTimeInMs, ml::DrawContext dc) override;
   void draw(ml::DrawContext d) override;
   void receiveNamedRawPointer(Path name, void* ptr) override;
+
+
 };
 
