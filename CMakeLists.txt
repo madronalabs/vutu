@@ -306,8 +306,13 @@ endif()
 if(APPLE)
 
   set(APP_BUNDLE ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Vutu.app)
-  set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
   
+  # Mac OS Monterey, XCode 14.0
+  # set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/build/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
+    
+  # Mac OS Ventura, XCode 14.2
+  set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/build/${target}.build/$<CONFIG>/${target}.app.xcent)
+    
   message("ENTITLEMENTS: " ${ENTITLEMENTS})
 
   # source location of the SDL2 framework. Get the latest dmg from
