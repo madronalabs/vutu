@@ -238,6 +238,10 @@ endif()
 # add other external libraries
 target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
 
+#
+target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIRS})
+
+
 if(APPLE)
     # ARC must be off for juce
     target_compile_options(${target} PRIVATE "-fno-objc-arc")
