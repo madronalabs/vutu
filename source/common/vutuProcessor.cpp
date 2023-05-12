@@ -177,7 +177,6 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   float gain = _params.getRealFloatValue("master_volume");
   float amp = dBToAmp(gain);
     
-  std::cout << "gain: " << gain << "  amp: " << amp << "\n";
   DSPVector sampleVec;
   
   ml::Sample* samplePlaying{ nullptr };
