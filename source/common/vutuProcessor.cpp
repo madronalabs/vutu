@@ -174,10 +174,10 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   }
   
   // get params from the SignalProcessor.
-  float gain = getParam("master_volume");
+  float gain = _params.getRealFloatValue("master_volume");
   float amp = dBToAmp(gain);
     
- // std::cout << "gain: " << gain << "\n";
+  std::cout << "gain: " << gain << "  amp: " << amp << "\n";
   DSPVector sampleVec;
   
   ml::Sample* samplePlaying{ nullptr };
@@ -216,9 +216,6 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
     sendMessageToActor(_controllerName, Message{Path{"set_prop", viewProperty}, playbackTime});
   }
   
-  // Running the sine generators makes DSPVectors as output.
-  // The input parameter is omega: the frequency in Hz divided by the sample rate.
-  // The output sines are multiplied by the gain.
   outputs[0] = outputs[1] = sampleVec*amp;
 }
 
@@ -270,7 +267,7 @@ void VutuProcessor::onMessage(Message msg)
   {
     case(hash("set_param")):
     {
-      setParam(tail(msg.address), msg.value.getFloatValue());
+      _params.setFromNormalizedValue(tail(msg.address), msg.value.getFloatValue());
       break;
     }
     case(hash("set_prop")):

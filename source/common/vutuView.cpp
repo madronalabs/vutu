@@ -356,7 +356,7 @@ void VutuView::onMessage(Message msg)
           
           // store param value in local tree.
           Path paramName = tail(msg.address);
-          _params.setParamFromNormalizedValue(paramName, msg.value);
+          _params.setFromNormalizedValue(paramName, msg.value);
           
           // if the parameter change message is not from the controller,
           // forward it to the controller.

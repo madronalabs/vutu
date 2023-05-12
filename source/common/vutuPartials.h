@@ -8,6 +8,8 @@
 
 #include "madronalib.h"
 
+#include "MLFiles.h"
+
 // stats about partials
 
 namespace ml
@@ -520,5 +522,26 @@ inline VutuPartialsData* jsonToVutuPartials(JSONHolder& jsonData)
   calcStats(*pVutuPartials);
   return pVutuPartials;
 }
+
+
+// load Vutu partials from the file. If successful, creates a new VutuPartialsData object that the caller must own.
+//
+inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
+{
+  VutuPartialsData* newPartials{nullptr};
+  
+  // TODO verify successful load
+  
+  TextFragment partialsText;
+  if(fileToLoad.loadAsText(partialsText))
+  {
+    auto partialsJSON = textToJSON(partialsText);
+    newPartials = jsonToVutuPartials(partialsJSON);
+
+  }
+  return newPartials;
+}
+
+
 
 }

@@ -502,12 +502,12 @@ int VutuController::analyzeSample()
   
   int sr = _sourceSample.sampleRate;
   
-  auto res = getPlainValue(params, "resolution");
-  auto width = getPlainValue(params, "window_width");
-  auto drift = getPlainValue(params, "freq_drift");
-  auto floor = getPlainValue(params, "amp_floor");
-  auto loCut = getPlainValue(params, "lo_cut");
-  auto hiCut = getPlainValue(params, "hi_cut");
+  auto res = params.getRealFloatValue("resolution");
+  auto width = params.getRealFloatValue("window_width");
+  auto drift = params.getRealFloatValue("freq_drift");
+  auto floor = params.getRealFloatValue("amp_floor");
+  auto loCut = params.getRealFloatValue("lo_cut");
+  auto hiCut = params.getRealFloatValue("hi_cut");
 
   analyzer_configure(res, width);
   analyzer_setFreqDrift(drift);

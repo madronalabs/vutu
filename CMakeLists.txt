@@ -311,7 +311,7 @@ if(APPLE)
   # set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/build/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
     
   # Mac OS Ventura, XCode 14.2 - looks like they changed the .xcent location
-  set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/build/${target}.build/$<CONFIG>/${target}.app.xcent)
+  set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
     
   message("ENTITLEMENTS: " ${ENTITLEMENTS})
 
