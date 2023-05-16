@@ -66,6 +66,8 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
 {
   NativeDrawContext* nvg = getNativeContext(dc);
   const int gridSize = dc.coords.gridSizeInPixels;
+  
+  const float maxBwSize = gridSize/8.f;
 
   if(!_backingLayer) return;
   int w = _backingLayer->width;
@@ -132,7 +134,7 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
       size_t framesInPartial = partial.time.size();
       
       //    nvgStrokeColor(nvg, sineColor);// TODO make avg color for stroke?
-      nvgStrokeWidth(nvg, 3); // TEMP
+      nvgStrokeWidth(nvg, 1); // TEMP
       nvgBeginPath(nvg);
       
       float x1 = 0.;
@@ -142,7 +144,10 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
         auto frame = getPartialFrameByIndex(*_pPartials, p, i);
         
         float x = timeToX(_pPartials->partials[p].time[i]);
+        float y = freqToY(frame.freq);
         
+        // adding noise fades opacity up to 1
+        float bw = (frame.bandwidth);
 
         if((i == 0) || (x > x1 + kMinLineLength))
         {
@@ -150,14 +155,9 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
           totalFramesDrawn++;
           
           float thickness = ampToThickness(frame.amp);
-          float y = freqToY(frame.freq);
           
           float colorOpacity = 0.5f;
           float maxOpacity = 1.0f;
-          
-          
-          // adding noise fades opacity up to 1
-          float bw = bandwidthToUnity(frame.bandwidth);
           
           // std::cout << "frame " << i << " bw " << bw << "\n";
           
@@ -169,17 +169,24 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
             thickness = 1.f;
           }
           
-          auto colorWithNoise = lerp(sineColor, noiseColor, bw);
-          auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);
+       //   auto colorWithNoise = lerp(sineColor, noiseColor, bw);
+       //   auto partialColor = multiplyAlpha(colorWithNoise, pathOpacity);
           
           float y1 = clamp(y - thickness/2.f, 0.f, float(h));
           float y2 = clamp(y + thickness/2.f, 0.f, float(h));
 
-          nvgStrokeColor(nvg, partialColor);
+          nvgStrokeColor(nvg, sineColor);
           nvgBeginPath(nvg);
           
           nvgMoveTo(nvg, x, y1);
           nvgLineTo(nvg, x, y2);
+          nvgStroke(nvg);
+        }
+        
+        if(bw > 0.f)
+        {
+          nvgBeginPath(nvg);
+          nvgCircle(nvg, x, y, bw*maxBwSize);
           nvgStroke(nvg);
         }
       }

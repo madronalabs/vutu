@@ -75,6 +75,14 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "noise_width" },
+    { "range", {10, 500} },
+    { "plaindefault", 50 },
+    { "log", false },
+    { "units", "Hz" }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "master_volume" },
     { "range", {-60, 0} },
     { "log", false },
@@ -82,7 +90,6 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "dB" }
   } ) );
 }
-
 
 void resample(const ml::Sample* pSrc, ml::Sample* pDest)
 {

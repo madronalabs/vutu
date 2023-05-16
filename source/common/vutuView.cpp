@@ -69,6 +69,8 @@ void VutuView::layoutView(DrawContext dc)
   _view->_widgets["lo_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {6.5, dialsY2}));
   _view->_widgets["hi_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {8, dialsY1}));
   
+  _view->_widgets["noise_width"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {11, dialsY1}));
+  
   _view->_widgets["freq_drift"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {9.5, dialsY2}));
   
   // right dials
@@ -82,7 +84,7 @@ void VutuView::layoutView(DrawContext dc)
     _view->_backgroundWidgets[labelName]->setRectProperty
     ("bounds", alignTopCenterToPoint(labelRect, dialRect.bottomCenter() - Vec2(0, 0.5)));
   };
-  for(auto dialName : {"resolution", "window_width", "amp_floor", "lo_cut", "hi_cut", "freq_drift", "volume"})
+  for(auto dialName : {"resolution", "window_width", "amp_floor", "lo_cut", "hi_cut", "noise_width", "freq_drift", "volume"})
   {
     positionLabelUnderDial(dialName);
   }
@@ -189,6 +191,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   addControlLabel("freq_drift_label", "freq. drift");
   addControlLabel("lo_cut_label", "lo cut");
   addControlLabel("hi_cut_label", "hi cut");
+  addControlLabel("noise_width_label", "noise width");
   addControlLabel("volume_label", "volume");
   
   auto addOtherLabel = [&](Path name, TextFragment t)
@@ -241,6 +244,12 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     {"size", largeDialSize },
     {"feature_scale", 2.0 },
     {"param", "hi_cut" }
+  } );
+  
+  _view->_widgets.add_unique< DialBasic >("noise_width", WithValues{
+    {"size", largeDialSize },
+    {"feature_scale", 2.0 },
+    {"param", "noise_width" }
   } );
   
   _view->_widgets.add_unique< DialBasic >("volume", WithValues{

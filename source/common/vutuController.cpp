@@ -508,15 +508,56 @@ int VutuController::analyzeSample()
   auto floor = params.getRealFloatValue("amp_floor");
   auto loCut = params.getRealFloatValue("lo_cut");
   auto hiCut = params.getRealFloatValue("hi_cut");
+  auto noiseWidth = params.getRealFloatValue("noise_width");
 
   analyzer_configure(res, width);
   analyzer_setFreqDrift(drift);
   analyzer_setAmpFloor(floor);
   analyzer_setFreqFloor(loCut);
+  
+  analyzer_setBwRegionWidth(noiseWidth);
     
   // make new partial list and give ownership to _lorisPartials
   Loris::PartialList* newPartials = createPartialList();
   _lorisPartials = std::make_unique< Loris::PartialList >(*newPartials);
+  
+  
+  //  if verbose, spew out the Analyzer state:
+  if ( true )
+  {
+    std::cout << "* Loris Analyzer configuration:" << std::endl;
+    std::cout << "*\tfrequency resolution: " << analyzer_getFreqResolution() << " Hz\n";
+    std::cout << "*\tanalysis window width: " << analyzer_getWindowWidth() << " Hz\n";
+    std::cout << "*\tanalysis window sidelobe attenuation: "
+    << analyzer_getSidelobeLevel() << " dB\n";
+    std::cout << "*\tspectral amplitude floor: " << analyzer_getAmpFloor() << " dB\n";
+    std::cout << "*\tminimum partial frequecy: " << analyzer_getFreqFloor() << " Hz\n";
+    std::cout << "*\thop time: " << 1000*analyzer_getHopTime() << " ms\n";
+    std::cout << "*\tmaximum partial frequency drift: " << analyzer_getFreqDrift()
+    << " Hz\n";
+    std::cout << "*\tcrop time: " << 1000*analyzer_getCropTime() << " ms\n";
+    
+    if (1)//( gAnalyzer->associateBandwidth() )
+    {
+      if (1)// ( gAnalyzer->bandwidthIsResidue() )
+      {
+        std::cout << "*\tspectral residue bandwidth association region width: "
+        << analyzer_getBwRegionWidth() << " Hz\n";
+      }
+      else
+      {
+        std::cout << "*\tsinusoidal convergence bandwidth tolerance: "
+        << analyzer_getBwConvergenceTolerance() << "\n";
+      }
+    }
+    else
+    {
+      std::cout << "*\tstoring no bandwidth\n";
+    }
+
+    
+    std::cout << std::endl;
+  }
   
   analyze( vx.data(), totalFrames, sr, _lorisPartials.get() );
   
