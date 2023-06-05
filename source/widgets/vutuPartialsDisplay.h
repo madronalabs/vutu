@@ -27,7 +27,7 @@ class VutuPartialsDisplay : public Widget
   
 public:
   
-  virtual void handleMessage(Message msg, Message* r) override
+  virtual void handleMessage(Message msg, MessageList* r) override
   {
     std::cout << "partialsDisplay got message: " <<  msg << "\n";
     Widget::handleMessage(msg, r);

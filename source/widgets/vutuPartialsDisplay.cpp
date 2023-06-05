@@ -94,11 +94,9 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     Interval xRange{0.f, w - 1.f};
     Interval yRange{h - 1.f, 0.f};
     
-    
     float intervalStart = getFloatProperty("interval_start");
     float intervalEnd = getFloatProperty("interval_end");
     Interval timeInterval{intervalStart, intervalEnd};
-
     
     constexpr float kMinLineLength{2.f};
     auto xToTime = projections::linear({0.f, w - 1.f}, timeInterval);
@@ -191,9 +189,6 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
         }
       }
     }
-    
-    float maxAvgAmp = 0.f;
-    float minAvgAmp = 100000.f;
         
     // draw spines
     auto spineColor(rgba(0, 1, 1, 1));
@@ -228,12 +223,10 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
 
     }
     nvgStroke(nvg);
-    
-    std::cout << "\n min avg ampL: " << minAvgAmp << " max avg amp: " << maxAvgAmp << "\n";
 
     auto roughEnd = high_resolution_clock::now();
     auto roughMillisTotal = duration_cast<milliseconds>(roughEnd - roughStart).count();
-   std::cout << "partials painting time rough millis: " << roughMillisTotal << "\n";
+    std::cout << "partials painting time rough millis: " << roughMillisTotal << "\n";
     
   
   }

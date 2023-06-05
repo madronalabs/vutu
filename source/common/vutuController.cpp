@@ -294,11 +294,11 @@ int VutuController::loadPartialsFromPath(Path partialsPath)
   File fileToLoad(partialsPath);
   if(fileToLoad)
   {
-    TextFragment partialsText;
-    fileToLoad.loadAsText(partialsText);
+//    TextFragment partialsText;
+//    fileToLoad.loadAsText(partialsText);
     
-    auto partialsJSON = textToJSON(partialsText);
-    if(VutuPartialsData* newPartials = jsonToVutuPartials(partialsJSON))
+//    auto partialsJSON = textToJSON(partialsText);
+    if(VutuPartialsData* newPartials = loadVutuPartialsFromFile(fileToLoad))
     {
       // transfer ownership of new partials to _vutuPartials and delete previous
       _vutuPartials = std::unique_ptr<VutuPartialsData>(newPartials);
@@ -312,6 +312,7 @@ int VutuController::loadPartialsFromPath(Path partialsPath)
   
   return OK;
 }
+
 
 
 Path VutuController::showLoadDialog(Symbol fileType)
@@ -351,7 +352,7 @@ Path VutuController::showLoadDialog(Symbol fileType)
         defaultLocation = File(getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
       }
       auto defaultPathText = defaultLocation.getFullPathAsText();
-      nfdfilteritem_t filterItem[1] = { { "JSON data", "utu" } }; // can add compressed JSON here
+      nfdfilteritem_t filterItem[1] = { { "JSON data", "utu" } };
       result = NFD_OpenDialog(&outPath, filterItem, 1, defaultPathText.getText());
       break;
     }
@@ -390,19 +391,35 @@ Path VutuController::showLoadDialog(Symbol fileType)
 }
 
 
-TextFragment extensionForFileType(Symbol fileType)
+std::vector<TextFragment> extensionsForFileType(Symbol fileType)
 {
-  TextFragment r;
+  std::vector<TextFragment> r;
   switch(hash(fileType))
   {
     case(hash("partials")):
-      r = "utu";
+      r.push_back("utu");
       break;
     case(hash("audio")):
-      r = "wav";
+      r.push_back("wav");
       break;
   }
   return r;
+}
+
+
+TextFragment getFileDescription(TextFragment extension)
+{
+  TextFragment desc;
+  switch(hash(extension))
+  {
+    case(hash("utu")):
+      desc = "Utu partials (JSON)";
+      break;
+    case(hash("wav")):
+      desc = "WAV audio";
+      break;
+  }
+  return desc;
 }
 
 Path VutuController::showSaveDialog(Symbol fileType)
@@ -432,15 +449,23 @@ Path VutuController::showSaveDialog(Symbol fileType)
     
     Path currentPath = "default";//textToPath(_params["current_patch"].getTextValue());
     Symbol currentName = last(currentPath);
-    auto ext =  extensionForFileType(fileType);
+    auto ext = extensionsForFileType(fileType);
     TextFragment defaultName (currentName.getTextFragment());
     
     // prepare filters for the dialog
-    const int nFilters = 1;
-    nfdfilteritem_t filterItem[nFilters] = {{fileType.getTextFragment().getText(), ext.getText()}};
+    const size_t kMaxFilters{4};
+    const int nFilters = std::min(ext.size(), kMaxFilters);
+    nfdfilteritem_t filterItems[kMaxFilters];
+    
+    for(int i=0; i<nFilters; ++i)
+    {
+      // set filter item description and extension
+      auto extItem = ext[i].getText();
+      filterItems[i] = {getFileDescription(extItem).getText(), extItem};
+    }
     
     // show the dialog
-    nfdresult_t result = NFD_SaveDialog(&savePathAsString, filterItem, nFilters, rootText.getText(), defaultName.getText());
+    nfdresult_t result = NFD_SaveDialog(&savePathAsString, filterItems, nFilters, rootText.getText(), defaultName.getText());
     if (result == NFD_OKAY)
     {
       puts(savePathAsString);
@@ -795,10 +820,25 @@ void VutuController::onMessage(Message m)
           {
             if(auto savePath = showSaveDialog("partials"))
             {
-              auto partialsJson = vutuPartialsToJSON(*pPartials);
-              auto partialsText = JSONToText(partialsJson);
-              File saveFile (savePath);
-              saveTextToPath(partialsText, savePath);
+              std::cout << "saving to path: " << savePath << "\n";
+              auto ext = getExtensionFromPath(savePath);
+              
+              std::cout << "extension: " << ext << "\n";
+              if(ext == "utu")
+              {
+                auto partialsJson = vutuPartialsToJSON(*pPartials);
+                auto partialsText = JSONToText(partialsJson);
+                File saveFile (savePath);
+                if(saveFile.hasWriteAccess())
+                {
+                  saveTextToPath(partialsText, savePath);
+                }
+                else
+                {
+                  std::cout << "export partials: no write access!\n";
+                  // TODO error
+                }
+              }
             }
           }
           messageHandled = true;

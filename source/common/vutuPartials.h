@@ -17,7 +17,9 @@ namespace ml
 
 static constexpr float kVutuPartialsFileVersion{ 1.0 };
 static constexpr char kVutuPartialsFileType[] = "VutuPartials";
+static constexpr char kVutuPartials2FileType[] = "VutuPartials2";
 
+// these values are calculated after reading in the partials data.
 struct PartialsStats
 {
   // get range of values for each parameter (except phase)
@@ -34,6 +36,7 @@ struct PartialsStats
   std::vector< Interval > partialTimeRanges; // time range for each partial
 };
 
+// a single partial is a trajectory of these five values over time.
 struct VutuPartial
 {
   std::vector< float > time;
@@ -43,6 +46,8 @@ struct VutuPartial
   std::vector< float > phase;
 };
 
+// this structure holds the individual partials and related data.
+// all this data except stats is stored to a partials file.
 struct VutuPartialsData
 {
   PartialsStats stats;
@@ -58,7 +63,6 @@ struct VutuPartialsData
   float freqDrift;
   float loCut;
   float hiCut;
-  
 };
 
 struct PartialFrame
@@ -98,8 +102,12 @@ inline std::ostream& operator<< (std::ostream& out, const PartialFrame& r)
 
 inline Interval getVectorExtrema(const std::vector< float >& vec)
 {
-  float fMin = *std::min_element(vec.begin(), vec.end());
-  float fMax = *std::max_element(vec.begin(), vec.end());
+  float fMin{0}, fMax{0};
+  if(vec.size() > 0)
+  {
+    fMin = *std::min_element(vec.begin(), vec.end());
+    fMax = *std::max_element(vec.begin(), vec.end());
+  }
   return Interval{fMin, fMax};
 }
 
@@ -181,6 +189,8 @@ inline void calcStats(VutuPartialsData& p)
   p.stats.bandwidthRange = getParamRangeInPartials(p, "bandwidth");
   p.stats.freqRange = getParamRangeInPartials(p, "freq");
   p.stats.nPartials = p.partials.size();
+  
+  std::cout << "calcStats: " <<   p.stats.nPartials << " partials. \n";
 
   // store min, max times for each partial
   p.stats.partialTimeRanges.clear();
@@ -214,8 +224,8 @@ inline void calcStats(VutuPartialsData& p)
     return a.first < b.first;
   });
   // walk the sorted list keeping track of max simultaneously active partials
-  size_t activePartials{0};
-  size_t maxActive{0};
+  int activePartials{0};
+  int maxActive{0};
   float maxActiveTime{0.f};
   for(auto& p : startAndEndTimes)
   {
@@ -241,7 +251,7 @@ inline void calcStats(VutuPartialsData& p)
   p.stats.maxActivePartials = maxActive;
   p.stats.maxActiveTime = maxActiveTime;
   
-  //std::cout << "\n\n max active: " << p.stats.maxActivePartials <<  "at time: " << p.stats.maxActiveTime << "\n";
+  std::cout << "\n\n max active partials: " << p.stats.maxActivePartials <<  " at time: " << p.stats.maxActiveTime << "\n";
 }
 
 // get an interpolated frame of data from the partial index p of the VutuPartialsData at time t.
@@ -415,6 +425,114 @@ inline JSONHolder vutuPartialsToJSON(const VutuPartialsData& partialsData)
   return root;
 }
 
+
+// return a binary blob representing the partials. The caller is responsible for freeing the object.
+//
+inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partialsData)
+{
+  Tree<Value> tree;
+  tree["version"] = kVutuPartialsFileVersion;
+  tree["type"] = kVutuPartials2FileType;
+  tree["source"] = partialsData.sourceFile.getText();
+  tree["resolution"] = partialsData.resolution;
+  tree["window_width"] = partialsData.windowWidth;
+  tree["amp_floor"] = partialsData.ampFloor;
+  tree["freq_drift"] = partialsData.freqDrift;
+  tree["lo_cut"] = partialsData.loCut;
+  tree["hi_cut"] = partialsData.hiCut;
+
+  const size_t nPartials = partialsData.partials.size();
+  tree["n_partials"] = nPartials;
+
+  std::cout << "exporting " << nPartials << " partials as binary\n";
+
+  
+  for(int i=0; i<nPartials; ++i)
+  {
+    VutuPartial& sp = const_cast<VutuPartial&>(partialsData.partials[i]);
+    
+    size_t partialLength = sp.time.size();
+    
+    TextFragment partialIndexText ("p", textUtils::naturalNumberToText(i));
+    size_t arrayBytes = partialLength*sizeof(float);
+    
+    Value timeBlob(sp.time.data(), arrayBytes);
+    Path timePath(Symbol(partialIndexText), "time");
+    tree[timePath] = timeBlob;
+    
+    Value ampBlob(sp.amp.data(), arrayBytes);
+    Path ampPath(Symbol(partialIndexText), "amp");
+    tree[ampPath] = ampBlob;
+    
+    Value freqBlob(sp.freq.data(), arrayBytes);
+    Path freqPath(Symbol(partialIndexText), "freq");
+    tree[freqPath] = freqBlob;
+    
+    Value bwBlob(sp.bandwidth.data(), arrayBytes);
+    Path bwPath(Symbol(partialIndexText), "bw");
+    tree[bwPath] = bwBlob;
+    
+    Value phaseBlob(sp.phase.data(), arrayBytes);
+    Path phasePath(Symbol(partialIndexText), "phase");
+    tree[phasePath] = phaseBlob;
+  }
+
+  return valueTreeToBinary(tree);
+}
+
+inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int partialIdx, Path pname)
+{
+  TextFragment partialIndexText ("p", textUtils::naturalNumberToText(partialIdx));
+  Path dataPath(Symbol(partialIndexText), pname);
+  Value dataBlob = tree[dataPath];
+  char* blobDataPtr = static_cast<char*>(dataBlob.getBlobValue());
+  unsigned blobSize = dataBlob.getBlobSize();
+  
+  const float* pVectorData{reinterpret_cast<const float*>(blobDataPtr)};
+  unsigned sizeInFloats = blobSize/sizeof(float);
+  return std::vector<float>(pVectorData, pVectorData + sizeInFloats);
+}
+
+// parse the binary data and return a new VutuPartialsData object.
+//
+inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& binaryData)
+{
+  VutuPartialsData* partials = new VutuPartialsData;
+  const uint8_t* pData{binaryData.data()};
+
+  Tree<Value> tree = binaryToValueTree(binaryData);
+  if(tree.getNode("n_partials"))
+  {
+    size_t nPartials = tree["n_partials"].getUnsignedLongValue();
+    size_t res = tree["resolution"].getFloatValue();
+    
+    if(nPartials > 0)
+    {
+      partials->version = tree["version"].getIntValue();
+      partials->resolution = tree["resolution"].getFloatValue();
+      partials->windowWidth = tree["window_width"].getFloatValue();
+      partials->ampFloor = tree["amp_floor"].getFloatValue();
+      partials->freqDrift = tree["freq_drift"].getFloatValue();
+      partials->loCut = tree["lo_cut"].getFloatValue();
+      partials->hiCut = tree["hi_cut"].getFloatValue();
+
+      partials->partials.resize(nPartials);
+      std::cout << "reading " << nPartials << " partials from binary\n";
+      for(int i=0; i<nPartials; ++i)
+      {
+        partials->partials[i].time = getPartialDataFromTree(tree, i, "time");
+        partials->partials[i].amp = getPartialDataFromTree(tree, i, "amp");
+        partials->partials[i].freq = getPartialDataFromTree(tree, i, "freq");
+        partials->partials[i].bandwidth = getPartialDataFromTree(tree, i, "bw");
+        partials->partials[i].phase = getPartialDataFromTree(tree, i, "phase");
+      }
+    }
+  }
+
+  calcStats(*partials);
+  return partials;
+}
+
 // parse the JSON and return a new VutuPartialsData object.
 //
 inline VutuPartialsData* jsonToVutuPartials(JSONHolder& jsonData)
@@ -427,32 +545,55 @@ inline VutuPartialsData* jsonToVutuPartials(JSONHolder& jsonData)
   cJSON* obj = rootObj->child;
   while (obj)
   {
+    TextFragment objStr(obj->string);
     switch(obj->type)
     {
       case cJSON_Number:
       {
-        if(TextFragment(obj->string) == "version")
+        auto stringHash = hash(objStr);
+        switch(stringHash)
         {
-          pVutuPartials->version = obj->valueint;
+          case(hash("version")):
+            pVutuPartials->version = obj->valueint;
+            break;
+          case(hash("resolution")):
+            pVutuPartials->resolution = obj->valuedouble;
+            break;
+          case(hash("window_width")):
+            pVutuPartials->windowWidth = obj->valuedouble;
+            break;
+          case(hash("amp_floor")):
+            pVutuPartials->ampFloor = obj->valuedouble;
+            break;
+          case(hash("freq_drift")):
+            pVutuPartials->freqDrift = obj->valuedouble;
+            break;
+          case(hash("lo_cut")):
+            pVutuPartials->loCut = obj->valuedouble;
+            break;
+          case(hash("hi_cut")):
+            pVutuPartials->hiCut = obj->valuedouble;
+            break;
         }
         break;
       }
       case cJSON_String:
       {
-        if(TextFragment(obj->string) == "type")
+        auto stringHash = hash(objStr);
+        switch(stringHash)
         {
-          pVutuPartials->type = Symbol(obj->valuestring);
-        }
-        else if(TextFragment(obj->string) == "source")
-        {
-          pVutuPartials->sourceFile = TextFragment(obj->valuestring);
+          case(hash("type")):
+            pVutuPartials->type = Symbol(obj->valuestring);
+            break;
+          case(hash("source")):
+            pVutuPartials->sourceFile = TextFragment(obj->valuestring);
+            break;
         }
         break;
       }
       case cJSON_Object:
       {
-        TextFragment pStr(obj->string);
-        if(pStr.beginsWith("p"))
+        if(objStr.beginsWith("p")) // get partial
         {
           //std::cout << "partial:" << pStr << "\n";
           
@@ -532,13 +673,27 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
   
   // TODO verify successful load
   
-  TextFragment partialsText;
-  if(fileToLoad.loadAsText(partialsText))
+  Path filePath = fileToLoad.getFullPath();
+  Symbol extension = getExtensionFromPath(filePath);
+  
+  if(extension == "utu")
   {
-    auto partialsJSON = textToJSON(partialsText);
-    newPartials = jsonToVutuPartials(partialsJSON);
-
+    TextFragment partialsText;
+    if(fileToLoad.loadAsText(partialsText))
+    {
+      auto partialsJSON = textToJSON(partialsText);
+      newPartials = jsonToVutuPartials(partialsJSON);
+    }
   }
+  if(extension == "ut2")
+  {
+    BinaryVector binaryData;
+    if(fileToLoad.load(binaryData))
+    {
+      newPartials = binaryToVutuPartials(binaryData);
+    }
+  }
+
   return newPartials;
 }
 
