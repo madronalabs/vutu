@@ -43,8 +43,6 @@ public:
   // enable / disable the right buttons on the View
   void setButtonEnableStates();
   
-
-  
 private:
 
   ml::Sample _sourceSample;

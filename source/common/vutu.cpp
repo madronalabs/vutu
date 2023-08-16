@@ -97,6 +97,8 @@ int main(int argc, char *argv[])
     appView.startTimersAndActor();
     SdlAppResize(&watcherData);
     
+    auto q = appController.params.getNormalizedValue("sample/end_time");
+    
     appController.sendAllParamsToView();
     appController.sendAllParamsToProcessor();
     appController.setButtonEnableStates();

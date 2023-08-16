@@ -25,7 +25,7 @@
 
 
 ml::Rect smallDialRect{0, 0, 1.0, 1.0};
-ml::Rect mediumDialRect{0, 0, 1.5, 1.5};
+ml::Rect mediumDialRect{0, 0, 2.0, 1.5};
 ml::Rect largeDialRect{0, 0, 3, 2};
 float mediumDialSize{0.625f};
 float largeDialSize{0.875f};
@@ -63,19 +63,20 @@ void VutuView::layoutView(DrawContext dc)
   
   // left dials
   _view->_widgets["resolution"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {2.0, dialsY1}));
-  _view->_widgets["window_width"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {5.0, dialsY1}));
   _view->_widgets["amp_floor"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {3.5, dialsY2}));
+  _view->_widgets["window_width"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {5.0, dialsY1}));
   
   _view->_widgets["lo_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {6.5, dialsY2}));
   _view->_widgets["hi_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {8, dialsY1}));
   
+  _view->_widgets["freq_drift"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {9.5, dialsY2}));
   _view->_widgets["noise_width"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {11, dialsY1}));
   
-  _view->_widgets["freq_drift"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {9.5, dialsY2}));
-  
   // right dials
-  _view->_widgets["volume"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {gx - 2.f, bottomY + 3.5f}));
-  
+  _view->_widgets["fundamental"]->setRectProperty("bounds", alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 1.5f}));
+  _view->_widgets["test_volume"]->setRectProperty("bounds", alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 3.5f}));
+  _view->_widgets["output_volume"]->setRectProperty("bounds", alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 5.5f}));
+
   // dial labels
   auto positionLabelUnderDial = [&](Path dialName)
   {
@@ -84,7 +85,7 @@ void VutuView::layoutView(DrawContext dc)
     _view->_backgroundWidgets[labelName]->setRectProperty
     ("bounds", alignTopCenterToPoint(labelRect, dialRect.bottomCenter() - Vec2(0, 0.5)));
   };
-  for(auto dialName : {"resolution", "window_width", "amp_floor", "lo_cut", "hi_cut", "noise_width", "freq_drift", "volume"})
+  for(auto dialName : {"resolution", "window_width", "amp_floor", "lo_cut", "hi_cut", "noise_width", "freq_drift", "fundamental", "test_volume", "output_volume"})
   {
     positionLabelUnderDial(dialName);
   }
@@ -105,6 +106,7 @@ void VutuView::layoutView(DrawContext dc)
 
   ml::Rect textButtonRect(0, 0, buttonWidth, 1);
 
+  
   float buttonsY1 = bottomY + 2.5;
   float buttonsY2 = bottomY + 4.0;
   float buttonsY3 = bottomY + 5.5;
@@ -192,8 +194,10 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   addControlLabel("lo_cut_label", "lo cut");
   addControlLabel("hi_cut_label", "hi cut");
   addControlLabel("noise_width_label", "noise width");
-  addControlLabel("volume_label", "volume");
-  
+  addControlLabel("fundamental_label", "fundamental");
+  addControlLabel("test_volume_label", "fund. volume");
+  addControlLabel("output_volume_label", "output volume");
+
   auto addOtherLabel = [&](Path name, TextFragment t)
   {
     _view->_backgroundWidgets.add_unique< TextLabelBasic >(name, WithValues{
@@ -252,12 +256,24 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     {"param", "noise_width" }
   } );
   
-  _view->_widgets.add_unique< DialBasic >("volume", WithValues{
-    {"size", largeDialSize },
+  _view->_widgets.add_unique< DialBasic >("fundamental", WithValues{
+    {"size", mediumDialSize },
     {"feature_scale", 2.0 },
-    {"param", "master_volume" }
+    {"fine_drag_scale", 0.005f },
+    {"param", "fundamental" }
   } );
   
+  _view->_widgets.add_unique< DialBasic >("test_volume", WithValues{
+    {"size", mediumDialSize },
+    {"feature_scale", 2.0 },
+    {"param", "test_volume" }
+  } );
+  _view->_widgets.add_unique< DialBasic >("output_volume", WithValues{
+    {"size", mediumDialSize },
+    {"feature_scale", 2.0 },
+    {"param", "output_volume" }
+  } );
+
   // buttons
   _view->_widgets.add_unique< TextButtonBasic >("open", WithValues{
     {"text", "open" },
@@ -304,10 +320,13 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   
   // source
   _view->_widgets.add_unique< SampleDisplay >("source", WithValues{
+    {"enable_interval", true },
+    {"param", "analysis_interval" }
   } );
   
   // partials
-  _view->_widgets.add_unique< VutuPartialsDisplay >("partials", WithValues{
+  // note: see knowsParam() override where the widget requests multiple parameters.
+  _view->_widgets.add_unique< VutuPartialsDisplay >("partials", WithValues{    
   } );
   
   // synth (synthesized sample)
@@ -357,6 +376,9 @@ void VutuView::onMessage(Message msg)
   {
     case(hash("set_param")):
     {
+      
+      std::cout << "VutuView:: setParam " << msg << "\n";
+      
       switch(hash(second(msg.address)))
       {
         default:

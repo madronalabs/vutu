@@ -30,7 +30,7 @@ class VutuProcessor final :
 public RtAudioProcessor
 {
   // sine generators.
-  SineGen s1, s2;
+  SineGen testSine;
   
 public:
   VutuProcessor(TextFragment appName, size_t instanceNum,

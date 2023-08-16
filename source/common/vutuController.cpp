@@ -155,11 +155,11 @@ void VutuController::broadcastSynthesizedSample()
 
 void VutuController::syncIntervals()
 {
-  sendMessageToActor(_processorName, {"do/set_interval_start", analysisInterval.mX1});
-  sendMessageToActor(_processorName, {"do/set_interval_end", analysisInterval.mX2});
-  sendMessageToActor(_viewName, {"do/set_interval_start", analysisInterval.mX1});
-  sendMessageToActor(_viewName, {"do/set_interval_end", analysisInterval.mX2});
-  sendMessageToActor(_viewName, {"do/set_source_duration", sourceDuration});
+  sendMessageToActor(_processorName, {"set_param/analysis_interval", analysisInterval});
+  sendMessageToActor(_viewName, {"set_param/analysis_interval", analysisInterval});
+
+  
+  // sendMessageToActor(_viewName, {"do/set_source_duration", sourceDuration});
 }
 
 int VutuController::saveSampleToWavFile(const Sample& sample, Path wavPath)
@@ -201,8 +201,6 @@ int VutuController::loadSampleFromPath(Path samplePath)
   if(fileToLoad)
   {
     std::cout << "file to load: " << samplePath << "\n";
-    std::cout << "init sr: " << _sourceSample.sampleRate << "\n";
-    
     // load the file
     auto filePathText = fileToLoad.getFullPathAsText();
     SF_INFO fileInfo{};
@@ -223,6 +221,8 @@ int VutuController::loadSampleFromPath(Path samplePath)
       _sourceSample.data.resize(samplesToRead);
       pData = _sourceSample.data.data();
       _sourceSample.sampleRate = fileInfo.samplerate;
+      
+      std::cout << "  file sr: " << _sourceSample.sampleRate << "\n";
       
       framesRead = sf_readf_float(file, pData, static_cast<sf_count_t>(framesToRead));
       
@@ -245,7 +245,7 @@ int VutuController::loadSampleFromPath(Path samplePath)
     
     sourceFileLoaded = fileToLoad;
 
-    // deinterleave to extract first channel if needed
+    // deinterleave in place to extract first channel if needed
     if(pData && fileInfo.channels > 1)
     {
       for(int i=0; i < framesRead; ++i)
@@ -256,10 +256,12 @@ int VutuController::loadSampleFromPath(Path samplePath)
     }
     
     normalize(_sourceSample);
+    _sourceSample.channels = 1;
+    _sourceSample.frames = framesRead;
     
     // set source duration and reset analysis interval to whole source length
     sourceDuration = framesRead/float(_sourceSample.sampleRate);
-    analysisInterval = {0.f, sourceDuration};
+    analysisInterval = {0.f, 1.f};
   }
   return OK;
 }
@@ -605,7 +607,8 @@ int VutuController::analyzeSample()
     _vutuPartials->freqDrift = drift;
     _vutuPartials->loCut = loCut;
     _vutuPartials->hiCut = hiCut;
-    
+
+
     // convert back to loris partials after cutHighs (hack-ish)
     _sumuToLorisPartials(_vutuPartials.get(), _lorisPartials.get());
     
@@ -826,6 +829,9 @@ void VutuController::onMessage(Message m)
               std::cout << "extension: " << ext << "\n";
               if(ext == "utu")
               {
+                // tuck current fundamental param value into partials data
+                pPartials->fundamental = params.getRealFloatValue("fundamental");
+                
                 auto partialsJson = vutuPartialsToJSON(*pPartials);
                 auto partialsText = JSONToText(partialsJson);
                 File saveFile (savePath);

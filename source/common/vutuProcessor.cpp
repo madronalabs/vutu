@@ -83,11 +83,50 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   } ) );
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
-    { "name", "master_volume" },
+    { "name", "fundamental" },
+    { "range", {22, 2200} },
+    { "plaindefault", 220 },
+    { "log", true },
+    { "units", "Hz" }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "test_volume" },
+    { "range", {0, 0.5f} },
+    { "log", false },
+    { "plaindefault", 0.f }
+    
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "output_volume" },
     { "range", {-60, 0} },
     { "log", false },
     { "plaindefault", -6 },
     { "units", "dB" }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "sample/start_time" },
+    { "range", {0, 1} },
+    { "default", 0.f }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "sample/end_time" },
+    { "range", {0, 1} },
+    { "default", 1.f }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "sample_duration" },
+    { "range", {0, 1} },
+    { "default", 1.f }
+  } ) );
+  
+  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+    { "name", "analysis_interval" },
+    { "default", Interval{0, 1} }
   } ) );
 }
 
@@ -155,7 +194,6 @@ RtAudioProcessor(nInputs, nOutputs, sampleRate)
   auto myName = TextFragment(appName, "processor", ml::textUtils::naturalNumberToText(instanceNum));
   registerActor(myName, this);
   
-  
   buildParameterTree(pdl, _params);
   setDefaults(_params);
 }
@@ -181,9 +219,15 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   }
   
   // get params from the SignalProcessor.
-  float gain = _params.getRealFloatValue("master_volume");
+  float gain = _params.getRealFloatValue("output_volume");
   float amp = dBToAmp(gain);
-    
+  
+  // test amp is not in dB so it can go to 0. TODO -inf dB setting
+  float testAmp = _params.getRealFloatValue("test_volume");
+  float testFreq = _params.getRealFloatValue("fundamental");
+
+  auto sineVec = testSine(testFreq / sr)*DSPVector(testAmp);
+
   DSPVector sampleVec;
   
   ml::Sample* samplePlaying{ nullptr };
@@ -222,7 +266,7 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
     sendMessageToActor(_controllerName, Message{Path{"set_prop", viewProperty}, playbackTime});
   }
   
-  outputs[0] = outputs[1] = sampleVec*amp;
+  outputs[0] = outputs[1] = sampleVec*amp + sineVec;
 }
 
 // toggle current playback state and tell controller
@@ -267,7 +311,7 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
 
 void VutuProcessor::onMessage(Message msg)
 {
-  //std::cout << "VutuProcessor: " << msg.address << " -> " << msg.value << "\n";
+  std::cout << "VutuProcessor: " << msg.address << " -> " << msg.value << "\n";
   
   switch(hash(head(msg.address)))
   {

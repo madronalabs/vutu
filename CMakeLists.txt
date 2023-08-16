@@ -183,7 +183,24 @@ file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
 list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} )
 list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} )
 
-add_executable(${target} ${app_sources})
+#--------------------------------------------------------------------
+# get icon file
+#--------------------------------------------------------------------
+
+if(APPLE)
+  # NOTE: Don't include the path in MACOSX_BUNDLE_ICON_FILE -- this is
+  # the property added to Info.plist
+  set(MACOSX_BUNDLE_ICON_FILE vutu.icns)
+  
+  # And this part tells CMake where to find and install the file itself
+  set(vutu_ICON ${CMAKE_CURRENT_SOURCE_DIR}/source/mac/vutu.icns)
+  set_source_files_properties(${vutu_ICON} PROPERTIES
+         MACOSX_PACKAGE_LOCATION "Resources")
+  
+endif()
+
+
+add_executable(${target} ${vutu_ICON} ${app_sources})
 
 # add include dirs
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source" )
@@ -306,6 +323,8 @@ elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
 endif()
 
+
+
 # copy SDL2.framework into bundle and codesign it
 if(APPLE)
 
@@ -337,7 +356,5 @@ if(APPLE)
       POST_BUILD
       COMMAND codesign --force --sign "-" --entitlements ${ENTITLEMENTS} "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework/Versions/A"
   )
-  
-  
-
 endif()
+

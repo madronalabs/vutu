@@ -24,12 +24,14 @@ class VutuPartialsDisplay : public Widget
   
 
   ml::DrawContext _prevDC{nullptr};
+  float prevFundamental{0};
+  Timer redrawTimer_;
   
 public:
   
   virtual void handleMessage(Message msg, MessageList* r) override
   {
-    std::cout << "partialsDisplay got message: " <<  msg << "\n";
+    //std::cout << "partialsDisplay got message: " <<  msg << "\n";
     Widget::handleMessage(msg, r);
   }
   
@@ -40,6 +42,19 @@ public:
   MessageList animate(int elapsedTimeInMs, ml::DrawContext dc) override;
   void draw(ml::DrawContext d) override;
   void receiveNamedRawPointer(Path name, void* ptr) override;
+  
+  void redrawPartials();
+  
+  // overriding this because we will probably need multiple parameters.
+  bool knowsParam(Path paramName) override
+  {
+    if(paramName == "fundamental")
+    {
+      return true;
+    }
+
+    return false;
+  }
 
 
 };

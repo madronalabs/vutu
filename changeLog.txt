@@ -1,6 +1,10 @@
 
 Vutu change log
 -------------------------
+version 0.9.6: Jun 17, 2023
+- added fundamental pitch setting
+- added noise width
+- freq display to log scale
 
 version 0.9.5: Jan 21, 2023
 - added audio export

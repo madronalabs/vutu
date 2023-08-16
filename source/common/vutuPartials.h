@@ -63,6 +63,7 @@ struct VutuPartialsData
   float freqDrift;
   float loCut;
   float hiCut;
+  float fundamental;
 };
 
 struct PartialFrame
@@ -399,7 +400,8 @@ inline JSONHolder vutuPartialsToJSON(const VutuPartialsData& partialsData)
   cJSON_AddNumberToObject(root.data(), "freq_drift", partialsData.freqDrift);
   cJSON_AddNumberToObject(root.data(), "lo_cut", partialsData.loCut);
   cJSON_AddNumberToObject(root.data(), "hi_cut", partialsData.hiCut);
-  
+  cJSON_AddNumberToObject(root.data(), "fundamental", partialsData.fundamental);
+
   const size_t nPartials = partialsData.partials.size();
   
   std::cout << "exporting " << nPartials << " partials \n";
@@ -440,6 +442,7 @@ inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partial
   tree["freq_drift"] = partialsData.freqDrift;
   tree["lo_cut"] = partialsData.loCut;
   tree["hi_cut"] = partialsData.hiCut;
+  tree["fundamental"] = partialsData.fundamental;
 
   const size_t nPartials = partialsData.partials.size();
   tree["n_partials"] = nPartials;
@@ -515,6 +518,7 @@ inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& 
       partials->freqDrift = tree["freq_drift"].getFloatValue();
       partials->loCut = tree["lo_cut"].getFloatValue();
       partials->hiCut = tree["hi_cut"].getFloatValue();
+      partials->fundamental = tree["fundamental"].getFloatValue();
 
       partials->partials.resize(nPartials);
       std::cout << "reading " << nPartials << " partials from binary\n";
@@ -573,6 +577,9 @@ inline VutuPartialsData* jsonToVutuPartials(JSONHolder& jsonData)
             break;
           case(hash("hi_cut")):
             pVutuPartials->hiCut = obj->valuedouble;
+            break;
+          case(hash("fundamental")):
+            pVutuPartials->fundamental = obj->valuedouble;
             break;
         }
         break;
