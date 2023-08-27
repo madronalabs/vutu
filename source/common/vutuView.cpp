@@ -378,9 +378,6 @@ void VutuView::onMessage(Message msg)
   {
     case(hash("set_param")):
     {
-      
-      std::cout << "VutuView:: setParam " << msg << "\n";
-      
       switch(hash(second(msg.address)))
       {
         default:

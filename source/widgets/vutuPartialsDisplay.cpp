@@ -143,11 +143,6 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     constexpr float kMinLineLength{2.f};
     auto xToTime = projections::linear(xRange, timeInterval);
     auto timeToX = projections::linear(timeInterval, xRange);
-
-    std::cout << "VutuPartialsDisplay: anal: " << analysisInterval <<  " src duration: " << _pPartials->sourceDuration << " timeInterval: " << timeInterval << "\n";
-    std::cout << "                 partials time range: " << _pPartials->stats.timeRange << "\n";
-
-
     
     auto freqRange = _pPartials->stats.freqRange;
     freqRange.mX1 -= kFreqMargin;
@@ -174,9 +169,8 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     auto roughStart = high_resolution_clock::now();
     size_t totalFramesDrawn{0};
     
+    // draw frame ribs, always separated vby at least kMinLineLength
     nvgBeginPath(nvg);
-
-    // draw frame amplitudes
     for(int p=0; p<nPartials; ++p)
     {
       const auto& partial = _pPartials->partials[p];
@@ -206,7 +200,7 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
           
           float y1 = clamp(y - thickness/2.f, 0.f, float(h));
           float y2 = clamp(y + thickness/2.f, 0.f, float(h));
-
+          
           nvgMoveTo(nvg, x, y1);
           nvgLineTo(nvg, x, y2);
         }
@@ -214,8 +208,62 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     }
     nvgStroke(nvg);
     
+    
+    // draw frame fills
+    nvgBeginPath(nvg);
+    auto partialFillColor(rgba(0, 1, 0, 0.5));
+    nvgFillColor(nvg, partialFillColor);
+    for(int p=0; p<nPartials; ++p)
+    {
+      const auto& partial = _pPartials->partials[p];
+      size_t framesInPartial = partial.time.size();
+      float x1 = 0.;
+      
+      for(int i = 0; i < framesInPartial; ++i)
+      {
+        auto frame = getPartialFrameByIndex(*_pPartials, p, i);
+        float x = timeToX(_pPartials->partials[p].time[i]);
+        float y = freqToY(frame.freq);
+        
+        
+        x1 = x;
+        float thickness = ampToThickness(frame.amp);
+        float y1 = clamp(y - thickness/2.f, 0.f, float(h));
+        float y2 = clamp(y + thickness/2.f, 0.f, float(h));
+        
+        if(i == 0)
+        {
+          nvgMoveTo(nvg, x, y1);
+        }
+        else
+        {
+          nvgLineTo(nvg, x, y1);
+        }
+        
+      }
+      for(int i = framesInPartial - 1; i >= 0; --i)
+      {
+        auto frame = getPartialFrameByIndex(*_pPartials, p, i);
+        float x = timeToX(_pPartials->partials[p].time[i]);
+        float y = freqToY(frame.freq);
+        
+        
+        x1 = x;
+        float thickness = ampToThickness(frame.amp);
+        float y1 = clamp(y - thickness/2.f, 0.f, float(h));
+        float y2 = clamp(y + thickness/2.f, 0.f, float(h));
+        
+
+          nvgLineTo(nvg, x, y2);
+        
+        
+      }
+    }
+    nvgFill(nvg);
+    
+    
     // draw spines
-    auto spineColor(rgba(0, 1, 0, 0.5));
+    auto spineColor(rgba(0, 1, 0, 0.25));
     nvgStrokeWidth(nvg, strokeWidth);
     nvgStrokeColor(nvg, spineColor);
     nvgBeginPath(nvg);
@@ -232,16 +280,11 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
         
         if(i == 0)
         {
-          //nvgBeginPath(nvg);
           nvgMoveTo(nvg, x, y);
         }
-        else if(i < framesInPartial - 1)
+        else 
         {
           nvgLineTo(nvg, x, y);
-        }
-        else
-        {
-          //nvgStroke(nvg);
         }
       }
     }
@@ -250,7 +293,8 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     // draw noise Xs
     nvgBeginPath(nvg);
     nvgStrokeWidth(nvg, strokeWidth);
-    nvgStrokeColor(nvg, spineColor);
+    auto xColor(rgba(0, 1, 0, 0.5));
+    nvgStrokeColor(nvg, xColor);
     for(int p=0; p<nPartials; ++p)
     {
       const auto& partial = _pPartials->partials[p];
@@ -299,11 +343,9 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
   
   Interval xRange{0.f, w - 1.f};
   Interval yRange{h - 1.f, 0.f};
-  
 
   Interval analysisInterval = getParamValue("analysis_interval").getIntervalValue();
   
-  std::cout << "VutuPartialsDisplay: interval " << analysisInterval << "\n";
   // background
   {
     nvgBeginPath(nvg);

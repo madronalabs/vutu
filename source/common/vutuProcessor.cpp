@@ -344,7 +344,7 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
 
 void VutuProcessor::onMessage(Message msg)
 {
-  std::cout << "VutuProcessor: " << msg.address << " -> " << msg.value << "\n";
+//  std::cout << "VutuProcessor: " << msg.address << " -> " << msg.value << "\n";
   
   switch(hash(head(msg.address)))
   {
@@ -390,7 +390,7 @@ void VutuProcessor::onMessage(Message msg)
           _pLorisPartials = *reinterpret_cast<Loris::PartialList**>(msg.value.getBlobValue());
           
 
-          std::cout << "VutuProcessor: got new loris partials: n = " << _pLorisPartials->size() << "\n";
+ //         std::cout << "VutuProcessor: got new loris partials: n = " << _pLorisPartials->size() << "\n";
 
           break;
         }
