@@ -110,6 +110,9 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
   int h = _backingLayer->height;
   
   const int gridSize = dc.coords.gridSizeInPixels;
+  constexpr float kMarginSize{1/8.};
+  int margin = gridSize*kMarginSize;
+  
   const float maxBwSize = h/64.f;//gridSize/2.f;
   const float strokeWidth = 2.f;//gridSize/16.f;
   
@@ -131,17 +134,21 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     size_t nPartials = _pPartials->stats.nPartials;
     std::cout << "painting " << nPartials << " partials... \n";
     
+    Interval analysisInterval = getParamValue("analysis_interval").getIntervalValue();
+    
     Interval xRange{0.f, w - 1.f};
     Interval yRange{h - 1.f, 0.f};
-    
-    float intervalStart = getFloatProperty("interval_start");
-    float intervalEnd = getFloatProperty("interval_end");
-    Interval timeInterval{intervalStart, intervalEnd};
+    Interval timeInterval{0.f, (analysisInterval.mX2 -  analysisInterval.mX1)*_pPartials->sourceDuration};
     
     constexpr float kMinLineLength{2.f};
-    auto xToTime = projections::linear({0.f, w - 1.f}, timeInterval);
-    auto timeToX = projections::linear(timeInterval, {0.f, w - 1.f});
-        
+    auto xToTime = projections::linear(xRange, timeInterval);
+    auto timeToX = projections::linear(timeInterval, xRange);
+
+    std::cout << "VutuPartialsDisplay: anal: " << analysisInterval <<  " src duration: " << _pPartials->sourceDuration << " timeInterval: " << timeInterval << "\n";
+    std::cout << "                 partials time range: " << _pPartials->stats.timeRange << "\n";
+
+
+    
     auto freqRange = _pPartials->stats.freqRange;
     freqRange.mX1 -= kFreqMargin;
     freqRange.mX1 = max(freqRange.mX1, kFreqMargin);
@@ -293,10 +300,10 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
   Interval xRange{0.f, w - 1.f};
   Interval yRange{h - 1.f, 0.f};
   
-  float intervalStart = getFloatProperty("interval_start");
-  float intervalEnd = getFloatProperty("interval_end");
-  Interval timeInterval{intervalStart, intervalEnd};
+
+  Interval analysisInterval = getParamValue("analysis_interval").getIntervalValue();
   
+  std::cout << "VutuPartialsDisplay: interval " << analysisInterval << "\n";
   // background
   {
     nvgBeginPath(nvg);
@@ -338,13 +345,16 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
     Interval timeInterval{intervalStart, intervalEnd};
     
     // make an image pattern. The entire source image maps to the specified rect of the destination.
-    NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
-    
+    //NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
+    // make an image pattern. The entire source image maps to the specified rect of the destination.
+    NVGpaint img = nvgImagePattern(nvg, margin*2, margin*2, w - margin*4, h - margin*4, 0, nativeImage, 1.0f);
+
     // paint image lighten over bg
     nvgSave(nvg);
     nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
     nvgBeginPath(nvg);
-    nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
+//    nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
+    nvgRect(nvg, margin*2, margin*2, w - margin*4, h - margin*4);
     nvgFillPaint(nvg, img);
     nvgFill(nvg);
     nvgRestore(nvg);

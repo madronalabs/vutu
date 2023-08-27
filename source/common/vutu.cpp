@@ -96,11 +96,8 @@ int main(int argc, char *argv[])
     appView.createPlatformView(windowInfo.windowPtr, windowInfo.flags);
     appView.startTimersAndActor();
     SdlAppResize(&watcherData);
-    
-    auto q = appController.params.getNormalizedValue("sample/end_time");
-    
-    appController.sendAllParamsToView();
-    appController.sendAllParamsToProcessor();
+        
+    appController.broadcastParams();
     appController.setButtonEnableStates();
     
     // start Actor and audio processing

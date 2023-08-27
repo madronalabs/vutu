@@ -137,6 +137,7 @@ void VutuController::broadcastPartialsData()
   Value partialsPtrValue(&pPartials, sizeof(VutuPartialsData*));
   sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
   sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
+
 }
 
 void VutuController::_clearSynthesizedSample()
@@ -153,14 +154,6 @@ void VutuController::broadcastSynthesizedSample()
   sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
 }
 
-void VutuController::syncIntervals()
-{
-  sendMessageToActor(_processorName, {"set_param/analysis_interval", analysisInterval});
-  sendMessageToActor(_viewName, {"set_param/analysis_interval", analysisInterval});
-
-  
-  // sendMessageToActor(_viewName, {"do/set_source_duration", sourceDuration});
-}
 
 int VutuController::saveSampleToWavFile(const Sample& sample, Path wavPath)
 {
@@ -261,7 +254,7 @@ int VutuController::loadSampleFromPath(Path samplePath)
     
     // set source duration and reset analysis interval to whole source length
     sourceDuration = framesRead/float(_sourceSample.sampleRate);
-    analysisInterval = {0.f, 1.f};
+    //analysisInterval = {0.f, 1.f};
   }
   return OK;
 }
@@ -281,7 +274,7 @@ void VutuController::showAnalysisInfo()
   Path shortName = last(pathLoaded);
   
   TextFragment a(pathToText(shortName));
-  TextFragment b(" [", floatToText(analysisInterval.mX1), " -- " ,floatToText(analysisInterval.mX2), "] " );
+  TextFragment b(" [", floatToText(p->stats.timeRange.mX1), " -- " ,floatToText(p->stats.timeRange.mX2), "] " );
   TextFragment c("partials: ", intToText(p->stats.nPartials));
   TextFragment d(" max freq: ", intToText(p->stats.freqRange.mX2));
   TextFragment e(" max active: ", intToText(p->stats.maxActivePartials));
@@ -516,19 +509,42 @@ int VutuController::analyzeSample()
 {
   int status{ false };
   
-  auto totalFrames = _sourceSample.data.size();
+  auto totalFrames = _sourceSample.frames;
   if(!totalFrames) return status;
+  
+  auto interval = params.getRealValue("analysis_interval").getIntervalValue();
+  auto frameInterval = interval*float(totalFrames);
+  
+  int framesInInterval = frameInterval.mX2 - frameInterval.mX1;
+  const float kFadeTime = 0.001f;
+  int fadeSamples = kFadeTime*_sourceSample.sampleRate;
   
   // make double-precision version of input
   std::vector< double > vx;
-  vx.resize(totalFrames);
-  for(int i=0; i<totalFrames; ++i)
+  vx.resize(framesInInterval);
+  int srcStart = frameInterval.mX1;
+  for(int i=0; i<framesInInterval; ++i)
   {
-    vx[i] = _sourceSample.data[i];
+    vx[i] = _sourceSample.data[srcStart + i];
   }
   
-  int sr = _sourceSample.sampleRate;
+  // fade in
+  for(int i=0; i<fadeSamples; ++i)
+  {
+    double gain = (double)i / (double)fadeSamples;
+    vx[i] *= gain;
+  }
   
+  // fade out
+  for(int i=0; i<fadeSamples; ++i)
+  {
+    int i2 = srcStart + framesInInterval - 1 - i;
+    double gain = (double)i / (double)fadeSamples;
+    vx[i2] *= gain;
+  }
+  
+  // set sample rate and configure analyzer
+  int sr = _sourceSample.sampleRate;
   auto res = params.getRealFloatValue("resolution");
   auto width = params.getRealFloatValue("window_width");
   auto drift = params.getRealFloatValue("freq_drift");
@@ -536,12 +552,10 @@ int VutuController::analyzeSample()
   auto loCut = params.getRealFloatValue("lo_cut");
   auto hiCut = params.getRealFloatValue("hi_cut");
   auto noiseWidth = params.getRealFloatValue("noise_width");
-
   analyzer_configure(res, width);
   analyzer_setFreqDrift(drift);
   analyzer_setAmpFloor(floor);
   analyzer_setFreqFloor(loCut);
-  
   analyzer_setBwRegionWidth(noiseWidth);
     
   // make new partial list and give ownership to _lorisPartials
@@ -586,7 +600,7 @@ int VutuController::analyzeSample()
     std::cout << std::endl;
   }
   
-  analyze( vx.data(), totalFrames, sr, _lorisPartials.get() );
+  analyze( vx.data(), framesInInterval, sr, _lorisPartials.get() );
   
   if(partialList_size(_lorisPartials.get()) > 0)
   {
@@ -601,6 +615,7 @@ int VutuController::analyzeSample()
     showAnalysisInfo();
     
     // store analysis params used
+    _vutuPartials->sourceDuration = sourceDuration;
     _vutuPartials->resolution = res;
     _vutuPartials->windowWidth = width;
     _vutuPartials->ampFloor = floor;
@@ -625,57 +640,61 @@ int VutuController::analyzeSample()
 // note output sample may be a different sample rate!
 void VutuController::synthesize()
 {
-  std::vector<double> samples;
-  Loris::Synthesizer::Parameters params;
-  params.sampleRate = kSampleRate;
-  
-  std::cout << "VutuController: synthesize: sr = " << params.sampleRate << "\n";
-  
   if(!_lorisPartials.get()) return;
+
+  std::vector<double> destSamples;
+  Loris::Synthesizer::Parameters synthParams;
+  synthParams.sampleRate = kSampleRate;
+  const float kFadeTime = 0.001f;
+
+  Interval analysisInterval = params.getRealValue("analysis_interval").getIntervalValue();
+  float duration = _vutuPartials->sourceDuration*(analysisInterval.mX2 -  analysisInterval.mX1);
+  int framesInInterval = duration*synthParams.sampleRate;
   
-  Loris::Synthesizer synth(params, samples);
-  synth.setFadeTime(0.001f);
+  // run the Loris synthesizer
+  Loris::Synthesizer synth(synthParams, destSamples);
+  synth.setFadeTime(kFadeTime);
   synth.synthesize(_lorisPartials->begin(), _lorisPartials->end());
   
-  // convert samples to floats
-  std::cout << "VutuController: synthesize: " << samples.size() << "samples synthesized. \n";
-  if(!samples.size()) return;
+  // convert destSamples to floats
+  std::cout << "VutuController: synthesize: " << destSamples.size() << "samples synthesized. \n";
+  if(!destSamples.size()) return;
   
-  // if there is a source, make buffer big enough to hold entire source at new sample rate
-  size_t synthSamples;
-  if(_sourceSample.data.size() > 0)
+  size_t framesSynthesized = destSamples.size();
+  int fadeSamples = min(size_t(kFadeTime*kSampleRate), framesSynthesized/2);
+
+  _synthesizedSample.data.resize(framesSynthesized);
+  _synthesizedSample.frames = framesSynthesized;
+  for(int i=0; i<framesSynthesized; ++i)
   {
-    size_t sourceSamples = _sourceSample.data.size();
-    size_t sourceSr = _sourceSample.sampleRate;
-    size_t synthSr = params.sampleRate;
-    synthSamples = sourceSamples*double(synthSr)/double(sourceSr);
+    _synthesizedSample.data[i] = destSamples[i];
   }
-  else
+
+  // fade in
+  for(int i=0; i<fadeSamples; ++i)
   {
-    synthSamples = samples.size();
+    double gain = (double)i / (double)fadeSamples;
+    _synthesizedSample.data[i] *= gain;
   }
   
-  _synthesizedSample.data.resize(synthSamples);
-  for(int i=0; i<samples.size(); ++i)
+  // fade out
+  for(int i=0; i<fadeSamples; ++i)
   {
-    _synthesizedSample.data[i] = samples[i];
-  }
-  for(int i=samples.size(); i < _synthesizedSample.data.size(); ++i)
-  {
-    _synthesizedSample.data[i] = 0.f;
+    int i2 = framesSynthesized - 1 - i;
+    double gain = (double)i / (double)fadeSamples;
+    _synthesizedSample.data[i2] *= gain;
   }
 
   normalize(_synthesizedSample);
-  _synthesizedSample.sampleRate = params.sampleRate;
+  _synthesizedSample.sampleRate = synthParams.sampleRate;
 }
-
 
 
 void VutuController::onMessage(Message m)
 {
   if(!m.address) return;
   
-// std::cout << "VutuController::onMessage:" << m.address << " " << m.value << " \n ";
+  //std::cout << "VutuController::onMessage:" << m.address << " " << m.value << " \n ";
   
   bool messageHandled{false};
   
@@ -685,9 +704,8 @@ void VutuController::onMessage(Message m)
     case(hash("set_param")):
     {
       Path whatParam = tail(addr);
-      switch(hash(head(whatParam)))
-      {
-      }
+      params.setFromNormalizedValue(whatParam, m.value);
+      broadcastParam(whatParam, m.flags);
       break;
     }
     case(hash("set_prop")):
@@ -726,8 +744,10 @@ void VutuController::onMessage(Message m)
           broadcastPartialsData();
           broadcastSynthesizedSample();
           setButtonEnableStates();
-          syncIntervals();
-          
+
+          params.setRealValue("analysis_interval", Interval{0, 1});
+          broadcastParam("analysis_interval", 0);
+
           messageHandled = true;
           break;
         }
@@ -776,8 +796,7 @@ void VutuController::onMessage(Message m)
         {
           _clearSynthesizedSample();
           Loris::PartialList* pLorisPartials = _lorisPartials.get();
-          if(pLorisPartials)
-          if(pLorisPartials->size() > 0)
+          if(pLorisPartials && pLorisPartials->size() > 0)
           {
             synthesize();
           }
@@ -872,8 +891,9 @@ void VutuController::onMessage(Message m)
               setButtonEnableStates();
               
               // set interval to whole partials file and broadcast
-              analysisInterval = {_vutuPartials->stats.timeRange.mX1, _vutuPartials->stats.timeRange.mX2};
-              syncIntervals();
+              params.setRealValue("analysis_interval", Interval{0, 1});
+              broadcastParam("analysis_interval", 0);
+
             }
           }
           messageHandled = true;

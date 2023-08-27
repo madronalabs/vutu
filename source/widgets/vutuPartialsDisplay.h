@@ -48,10 +48,16 @@ public:
   // overriding this because we will probably need multiple parameters.
   bool knowsParam(Path paramName) override
   {
+    // user param in "param" property
+    if(Path(getTextProperty("param")) == paramName)
+    {
+      return true;
+    }
     if(paramName == "fundamental")
     {
       return true;
     }
+    
 
     return false;
   }

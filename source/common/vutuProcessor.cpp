@@ -25,6 +25,23 @@ constexpr float kToneLo = 250, kToneHi = 4000;
 constexpr float kDecayLo = 0.8, kDecayHi = 20;
 constexpr float kLevelLo = 0.5f, kLevelHi = 2.f;
 
+size_t getStartFrame(const ml::Sample& sample, Interval srcInterval)
+{
+  auto totalFrames = float(sample.frames);
+  auto interval = srcInterval * totalFrames;
+  return interval.mX1;
+}
+
+size_t getEndFrame(const ml::Sample& sample, Interval srcInterval)
+{
+  auto totalFrames = float(sample.frames);
+  auto interval = srcInterval * totalFrames;
+  return interval.mX2;
+}
+
+
+
+
 void readParameterDescriptions(ParameterDescriptionList& params)
 {
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
@@ -130,9 +147,12 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   } ) );
 }
 
+// TODO sample utilities
 void resample(const ml::Sample* pSrc, ml::Sample* pDest)
 {
   int srcLen = pSrc->data.size();
+  if(!srcLen) return;
+  
   double factor = double(pDest->sampleRate) / double(pSrc->sampleRate);
     
   int expectedLen = (int)(srcLen * factor);
@@ -178,6 +198,9 @@ void resample(const ml::Sample* pSrc, ml::Sample* pDest)
     std::cout << "   Expected " << expectedLen << " samples, got " << destIdx << " out\n";
   }
   
+  // mono only!
+  pDest->frames = pDest->data.size();
+  
   std::cout << "resampled: " << pSrc->data.size() << " -> " << pDest->data.size() << "\n";
   
 }
@@ -215,7 +238,7 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   {
     //std::cout << "playbackState: " << playbackState << "\n";
     //std::cout << "playbackSampleIdx: " << playbackSampleIdx << "\n";
-    //std::cout << "analysis interval: " << analysisInterval << "\n";
+    //std::cout << "analysis interval: " << _params.getRealValue("analysis_interval").getIntervalValue() << "\n";
   }
   
   // get params from the SignalProcessor.
@@ -232,29 +255,36 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   
   ml::Sample* samplePlaying{ nullptr };
   Symbol viewProperty;
+
+
+  size_t frameEnd;
+  
   if(playbackState == "source")
   {
+    // source: play analysis interval portion
     samplePlaying = &_sourceSample;
+    auto interval = _params.getRealValue("analysis_interval").getIntervalValue();
+    frameEnd = getEndFrame(*samplePlaying, interval);
+
     viewProperty = "source_time";
   }
   else if(playbackState == "synth")
   {
-    if(_pSynthesizedSample)
-    {
-      samplePlaying = _pSynthesizedSample;
-      viewProperty = "synth_time";
-    }
+    // synthesized: play entire length
+    samplePlaying = _pSynthesizedSample;
+    frameEnd = getEndFrame(*samplePlaying, {0, 1});
+    viewProperty = "synth_time";
   }
 
   if(samplePlaying)
   {
-    if(samplePlaying->data.size() > 0)
+    if(samplePlaying->frames > 0)
     {
       load(sampleVec, &(samplePlaying->data[playbackSampleIdx]));
       playbackSampleIdx += kFloatsPerDSPVector;
     }
     
-    if(playbackSampleIdx >= samplePlaying->data.size())
+    if(playbackSampleIdx >= frameEnd - kFloatsPerDSPVector)
     {
       playbackState = "off";
       playbackSampleIdx = 0;
@@ -287,10 +317,12 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
   {
     if(prevState != "source")
     {
-      if(_sourceSample.data.size() > 0)
+      if(_sourceSample.frames > 0)
       {
+        // start playback at analysis interval start
         playbackState = "source";
-        playbackSampleIdx = 0;
+        auto interval = _params.getRealValue("analysis_interval").getIntervalValue();
+        playbackSampleIdx = getStartFrame(_sourceSample, interval);
         sendMessageToActor(_controllerName, Message{"do/playback_started/source"});
       }
     }
@@ -301,6 +333,7 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
     {
       if(_pSynthesizedSample && _pSynthesizedSample->data.size() > 0)
       {
+        // synthesized sample always starts from beginning
         playbackState = "synth";
         playbackSampleIdx = 0;
         sendMessageToActor(_controllerName, Message{"do/playback_started/synth"});
@@ -317,7 +350,7 @@ void VutuProcessor::onMessage(Message msg)
   {
     case(hash("set_param")):
     {
-      _params.setFromNormalizedValue(tail(msg.address), msg.value.getFloatValue());
+      _params.setFromNormalizedValue(tail(msg.address), msg.value);
       break;
     }
     case(hash("set_prop")):
@@ -377,18 +410,6 @@ void VutuProcessor::onMessage(Message msg)
         {
           // play either source or synth
           togglePlaybackState(third(msg.address));
-          break;
-        }
-          
-        case(hash("set_interval_start")):
-        {
-          analysisInterval.mX1 = msg.value.getFloatValue();
-          break;
-        }
-          
-        case(hash("set_interval_end")):
-        {
-          analysisInterval.mX2 = msg.value.getFloatValue();
           break;
         }
 

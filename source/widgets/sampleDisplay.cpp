@@ -4,7 +4,7 @@
 
 using namespace ml;
 
-
+constexpr float kMarginSize{1/8.};
 
 void SampleDisplay::resize(ml::DrawContext dc)
 {
@@ -52,9 +52,7 @@ MessageList SampleDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc)
     _dirty = true;
   }
 
-
   float t = getFloatPropertyWithDefault("playback_time", 0.f);
-  //std::cout << "progress: " << progress << "\n";
   if(t != _playbackTime)
   {
     _playbackTime = t;
@@ -63,7 +61,6 @@ MessageList SampleDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc)
   
   return MessageList{};
 }
-
 
 Rect SampleDisplay::getControlRect(int cIdx)
 {
@@ -97,21 +94,15 @@ Rect SampleDisplay::getControlRect(int cIdx)
   return r;
 }
 
-/*
-void SampleDisplay::updateParamValue(MessageList& r, Path paramPath, float newVal, uint32_t flags)
-{
-  auto requestPath = Path("set_param", paramPath);
-  
-  setParamValue(paramPath, newVal);
-  r.push_back(Message{requestPath, newVal, flags});
-}
-
-*/
-
 MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
 {
-  if(!getBoolPropertyWithDefault("enable_interval", false)) return MessageList();
-  if(!_pSample) return MessageList();
+  MessageList r{};
+  if(!getBoolPropertyWithDefault("enabled", true)) return r;
+  
+  // if we're not editing an interval, there is no UI interaction
+  if(!getBoolPropertyWithDefault("enable_interval", false)) return r;
+  
+  if(!_pSample) return r;
 
   constexpr float kScrollScale{-0.04f};
   constexpr float kFineDragScale{0.1f}; // TODO different fine drag behavior based on parameter values
@@ -119,12 +110,6 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
   
   Path pname{getTextProperty("param")};
   Path paramRequestPath = Path("editor/set_param", pname);
-  
-  MessageList r{};
-  
-  if(!getBoolPropertyWithDefault("enabled", true)) return r;
-  
-  auto type = e.type;
   
   // use top left relative coords
   Rect bounds = getBounds();
@@ -134,132 +119,106 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
   Interval prevValue = getParamValue(pname).getIntervalValue();
   Interval newValue = prevValue;
   
-  
-  std::cout << "got prev value: " << prevValue << "\n";
-
-  if(type == "down")
+  switch(hash(e.type))
   {
-    // get x distance to each control
-    float gx = gridPosition.x();
-    float dLeft = fabs(gx - getCenter(getControlRect(0)).x());
-    float dRight = fabs(gx - getCenter(getControlRect(1)).x());
-    
-    // get min of distances
-    float minDist = min(dLeft, dRight);
-    
-    // if min distance < k, start dragging the closest control
-    if(minDist < kMaxGrabDist)
+    case(hash("down")):
     {
-      if(dLeft < dRight)
+      // get x distance to each control
+      float gx = gridPosition.x();
+      float dLeft = fabs(gx - getCenter(getControlRect(0)).x());
+      float dRight = fabs(gx - getCenter(getControlRect(1)).x());
+      
+      // get min of distances
+      float minDist = min(dLeft, dRight);
+      
+      // if min distance < k, start dragging the closest control
+      if(minDist < kMaxGrabDist)
       {
-        currentDragControl_ = leftControl;
+        currentDragControl_ = (dLeft < dRight) ? leftControl : rightControl;
       }
-      else
+      
+      // always push a sequence start message
+      if(currentDragControl_ != none)
       {
-        currentDragControl_ = rightControl;
+        r.push_back(Message{paramRequestPath, prevValue, kMsgSequenceStart});
+        engaged = true;
+        _dragX1 = gridPosition.x();
       }
+      
+      // redraw for brackets
+      setDirty(true);
+      break;
     }
-        
-    // always push a sequence start message
-    if(currentDragControl_ != none)
+    case(hash("drag")):
     {
-      r.push_back(Message{paramRequestPath, prevValue, kMsgSequenceStart});
+      // change value
+      float dragX0 = gridPosition.x();
+      float delta = dragX0 - _dragX1;
+      _dragX1 = dragX0;
       
-      engaged = true;
-      _dragX1 = gridPosition.x();
-    }
-  }
-  else if(type == "drag")
-  {
-    // change value
-    float dragX0 = gridPosition.x();
-    float delta = dragX0 - _dragX1;
-    _dragX1 = dragX0;
-    
-    
-    if(delta != 0.f && (currentDragControl_ != none))
-    {
-      // clamp results of drag, in normalized coordinates
-      auto unityToX = projections::linear({0.f, 1.f}, {0.f, bounds.width()});
-      auto xToUnity = projections::linear({0.f, bounds.width()}, {0.f, 1.f});
-     
-      // normalize delta
-//      delta /= bounds.width();
-      delta = xToUnity(delta);
-      if(doFineDrag) delta *= kFineDragScale;
-      
-      std::cout << "\ndrag; " << currentDragControl_ << " delta = " << delta << "\n";
-  //    std::cout << "
-      
-      Rect controlRect = getControlRect(currentDragControl_);
-      float crw = controlRect.width();
-      float crwu = 0;// TEST xToUnity(crw);
-      float newLeftX = newValue.mX1;
-      float newRightX = newValue.mX2;
-      
-      // clip dragging control and bump other control if needed
-      if(currentDragControl_ == leftControl)
+      if(delta != 0.f && (currentDragControl_ != none))
       {
-        newLeftX += delta;
-        newLeftX = clamp(newLeftX, 0.f, 1.0f);
-        //paramValues[leftControl] = newLeftX;
-        //updateParamValue(r, paramPathsByControl[leftControl], newLeftX, 0);
-        newValue.mX1 = newLeftX;
-        
-        if(newLeftX > newRightX)
-        {
-          newRightX = newLeftX;
-          //paramValues[rightControl] = newRightX;
-          //updateParamValue(r, paramPathsByControl[rightControl], newRightX, 0);
-          newValue.mX2 = newRightX;
-        }
-      }
-      else if(currentDragControl_ == rightControl)
-      {
-        newRightX += delta;
-        newRightX = clamp(newRightX, 0.f, 1.0f);
-        //paramValues[rightControl] = newRightX;
-        //updateParamValue(r, paramPathsByControl[rightControl], newRightX, 0);
-        newValue.mX2 = newRightX;
+        // clamp results of drag, in normalized coordinates
+        auto xToUnity = projections::linear({0, bounds.width()}, {0.f, 1.f});
+        float marginU = xToUnity(kBracketWidth);
 
-        if(newRightX < newLeftX)
+        delta = xToUnity(delta);
+        if(doFineDrag) delta *= kFineDragScale;
+        
+        Rect controlRect = getControlRect(currentDragControl_);
+        float crw = controlRect.width();
+        float crwu = 0;// TEST xToUnity(crw);
+        float newLeftX = newValue.mX1;
+        float newRightX = newValue.mX2;
+        
+        // clip dragging control and bump other control if needed
+        if(currentDragControl_ == leftControl)
         {
-          newLeftX = newRightX;
-          //paramValues[leftControl] = newLeftX;
-          //updateParamValue(r, paramPathsByControl[leftControl], newLeftX, 0);
+          newLeftX += delta;
           newValue.mX1 = newLeftX;
+          
+          if(newLeftX > newRightX - marginU*2)
+          {
+            newRightX = newLeftX + marginU*2;
+          }
         }
+        else if(currentDragControl_ == rightControl)
+        {
+          newRightX += delta;
+          newValue.mX2 = newRightX;
+          
+          if(newRightX < newLeftX + marginU*2)
+          {
+            newLeftX = newRightX - marginU*2;
+          }
+        }
+        newLeftX = clamp(newLeftX, 0.f, 1.0f - marginU*2);
+        newRightX = clamp(newRightX, marginU*2, 1.0f);
+        newValue.mX1 = newLeftX;
+        newValue.mX2 = newRightX;
       }
+      if(newValue != prevValue)
+      {
+        // if value changed, set value and mark the Widget dirty
+        setParamValue(pname, newValue);
+        r.push_back(Message{paramRequestPath, newValue, 0});
+      }
+      break;
     }
-    if(newValue != prevValue)
+    case(hash("up")):
     {
-      // set value and mark the Widget dirty
-      setParamValue(pname, newValue);
-      r.push_back(Message{paramRequestPath, newValue, 0});
-      
-      std::cout << "new interval: " << newValue << "\n\n";
-
+      // if engaged, disengage and send a sequence end message
+      if(engaged && (currentDragControl_ != none))
+      {
+        r.push_back(Message{paramRequestPath, newValue, kMsgSequenceEnd});
+        engaged = false;
+        currentDragControl_ = none;
+      }
+      break;
     }
+    default:
+      break;
   }
-  else if(type == "up")
-  {
-    // if engaged, disengage and send a sequence end message
-    if(engaged && (currentDragControl_ != none))
-    {
-      // auto newVal = paramValues[currentDragControl_];
-      
-      // updateParamValue(r, paramPathsByControl[currentDragControl_], newVal, kMsgSequenceEnd);
-      r.push_back(Message{paramRequestPath, newValue, kMsgSequenceEnd});
-
-
-      std::cout << "UP: " << newValue << "\n\n";
-
-
-      engaged = false;
-      currentDragControl_ = none;
-    }
-  }
-  
   return r;
 }
 
@@ -276,7 +235,7 @@ void SampleDisplay::receiveNamedRawPointer(Path name, void* ptr)
   }
 }
 
-// Repaint the backing layer with an image of the partials.
+// Repaint the backing layer with an image of the entire sample.
 // Since we draw to a backing layer here, this must be called only
 // from animate(), not from draw().
 //
@@ -295,7 +254,7 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
   
   int w = _backingLayer->width;
   int h = _backingLayer->height;
-   
+  
   // begin rendering to backing layer
   drawToLayer(_backingLayer.get());
   nvgBeginFrame(nvg, w, h, 1.0f);
@@ -310,33 +269,19 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
     nvgFill(nvg);
   }
   
-  
-  // TEMP
-  nvgBeginPath(nvg);
-  auto testRect = Rect(0, 0, 2000, 1000);
-  nvgFillColor(nvg, colors::blue);
-  nvgRect(nvg, testRect);
-  nvgFill(nvg);
-  
   bool sampleOK = _pSample && _pSample->data.size();
-  
   if(sampleOK)
   {
-    
     size_t frames = _pSample->data.size();
     size_t sr = _pSample->sampleRate;
     
-    Interval frameInterval{0, float(frames)};
-    
-    std::cout << " SAMPLE OK *** " << frames << " frames \n";
-
-
-    Interval xRange{0.f, w - 1.f};
+    Interval frameInterval{0, float(frames - 1)};
+    Interval xRange{0, w - 1.f};
     Interval yRange{h - 1.f, 0.f};
     float yCenter{(h - 1.f)/2.f};
     
     constexpr float kMinLineLength{2.f};
-    auto xToFrame = projections::linear({0.f, w - 1.f}, frameInterval);
+    auto xToFrame = projections::linear(xRange, frameInterval);
     
     Interval ampRange = {0.f, 1.f};
     
@@ -351,9 +296,7 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
     nvgStrokeColor(nvg, color);
     nvgStrokeWidth(nvg, 1.0f);
     nvgBeginPath(nvg);
-
     
-    // TEMP no smoothing
     for(int x=0; x<w; ++x)
     {
       int frame = clamp(size_t(xToFrame(x)), 0UL, frames);
@@ -361,8 +304,6 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
       float thickness = ampToThickness(amp);
       nvgMoveTo(nvg, x, yCenter - thickness);
       nvgLineTo(nvg, x, yCenter + thickness);
-      
-      // std::cout << "frame: " << frame << " amp: " << amp << " \n";
     }
     nvgStroke(nvg);
 
@@ -391,12 +332,11 @@ void SampleDisplay::draw(ml::DrawContext dc)
   int w = bounds.width();
   int h = bounds.height();
   const int gridSizeInPixels = dc.coords.gridSizeInPixels;
-  
-  int margin = gridSizeInPixels/8.f;
+
+  int margin = gridSizeInPixels*kMarginSize;
   Rect marginBounds = shrink(bounds, margin);
   Interval xRange{marginBounds.left(), marginBounds.right()};
 
-  auto timeToX = projections::linear(currentValue, xRange);
   auto unityToX = projections::linear({0, 1}, xRange);
 
   float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", getFloat(dc, "common_stroke_width"));
@@ -416,9 +356,10 @@ void SampleDisplay::draw(ml::DrawContext dc)
   if(!_backingLayer) return;
   
   bool sampleOK = _pSample && _pSample->data.size();
-  
   if(sampleOK)
   {
+    auto sampleDuration = (float)_pSample->frames / (float)_pSample->sampleRate;
+    auto timeToX = projections::linear({0, sampleDuration}, xRange);
     size_t frames = _pSample->data.size();
     size_t sr = _pSample->sampleRate;
     Interval frameInterval = currentValue*sr;
@@ -426,7 +367,7 @@ void SampleDisplay::draw(ml::DrawContext dc)
     auto nativeImage = getNativeImageHandle(*_backingLayer);
     
     // make an image pattern. The entire source image maps to the specified rect of the destination.
-    NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
+    NVGpaint img = nvgImagePattern(nvg, margin*2, margin*2, w - margin*4, h - margin*4, 0, nativeImage, 1.0f);
     
     // draw image
     {
@@ -435,7 +376,7 @@ void SampleDisplay::draw(ml::DrawContext dc)
       
       // paint image lighten over bg
       nvgBeginPath(nvg);
-      nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
+      nvgRect(nvg, margin*2, margin*2, w - margin*4, h - margin*4);
       nvgFillPaint(nvg, img);
       nvgFill(nvg);
       nvgRestore(nvg);
@@ -453,14 +394,6 @@ void SampleDisplay::draw(ml::DrawContext dc)
       nvgStroke(nvg);
     }
     
-    // TEMP
-    nvgBeginPath(nvg);
-    auto testRect = Rect(marginBounds.left(), marginBounds.top(), 50, 50);
-    nvgRoundedRect(nvg, testRect, strokeWidth*2);
-    nvgStrokeWidth(nvg, strokeWidth);
-    nvgStrokeColor(nvg, colors::red);
-    nvgStroke(nvg);
-    
     // draw interval
     if(getBoolPropertyWithDefault("enable_interval", false))
     {
@@ -474,12 +407,21 @@ void SampleDisplay::draw(ml::DrawContext dc)
       loopRect.left() += margin;
       loopRect.width() -= margin*3;
       
+      if (currentDragControl_ != none)
+      {
+        loopRect = shrinkHeight(loopRect, margin);
+      }
       int bracketGlyphWidth = gridSizeInPixels*kBracketWidth;
       drawBrackets(nvg, loopRect, bracketGlyphWidth);
     }
+    
+    else // TEMP
+    {
+        
+    }
+    
   }
-  
-  
+    
   // draw border
   nvgBeginPath(nvg);
   nvgRoundedRect(nvg, marginBounds, strokeWidth*2);

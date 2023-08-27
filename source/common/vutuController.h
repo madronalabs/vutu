@@ -34,9 +34,6 @@ public:
   // Actor interface
   void onMessage(Message m) override;
 
-  // send a ml::Message directly to the Processor.
-  void sendMessageToProcessor(Message m);
-  
   // update the named collection of files and return a pointer to it.
   FileTree* updateCollection(Path which);
 
@@ -88,8 +85,8 @@ private:
   File sourceFileLoaded;
   
   // analysis / resynthesis interval
-  Interval sourceInterval{0, 0};
-  Interval analysisInterval{0, 0};
+  //Interval sourceInterval{0, 0};
+  //Interval analysisInterval{0, 0};
   
   TextFragment _partialsStatsText;
 

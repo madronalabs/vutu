@@ -23,8 +23,6 @@ static constexpr char kVutuPartials2FileType[] = "VutuPartials2";
 struct PartialsStats
 {
   // get range of values for each parameter (except phase)
-  float minTimeInSeconds;
-  float maxTimeInSeconds;
   Interval timeRange; // min and max time in all partials
   Interval ampRange;
   Interval bandwidthRange;
@@ -57,6 +55,7 @@ struct VutuPartialsData
   
   // source and analysis parameters
   TextFragment sourceFile;
+  float sourceDuration; // whole duration of source, will be longer than stats.timeRange
   float resolution;
   float windowWidth;
   float ampFloor;
@@ -192,7 +191,7 @@ inline void calcStats(VutuPartialsData& p)
   p.stats.nPartials = p.partials.size();
   
   std::cout << "calcStats: " <<   p.stats.nPartials << " partials. \n";
-
+  std::cout << "    timeRange: " <<   p.stats.timeRange << "\n";
   // store min, max times for each partial
   p.stats.partialTimeRanges.clear();
   for(int i=0; i<p.stats.nPartials; ++i)
@@ -512,6 +511,7 @@ inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& 
     if(nPartials > 0)
     {
       partials->version = tree["version"].getIntValue();
+      partials->sourceDuration = tree["source_duration"].getFloatValue();
       partials->resolution = tree["resolution"].getFloatValue();
       partials->windowWidth = tree["window_width"].getFloatValue();
       partials->ampFloor = tree["amp_floor"].getFloatValue();
@@ -559,6 +559,9 @@ inline VutuPartialsData* jsonToVutuPartials(JSONHolder& jsonData)
         {
           case(hash("version")):
             pVutuPartials->version = obj->valueint;
+            break;
+          case(hash("source_duration")):
+            pVutuPartials->sourceDuration = obj->valuedouble;
             break;
           case(hash("resolution")):
             pVutuPartials->resolution = obj->valuedouble;
@@ -700,7 +703,14 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
       newPartials = binaryToVutuPartials(binaryData);
     }
   }
-
+  
+  // if we didn't save a source duration, fake one from partials data
+  if(newPartials->sourceDuration == 0.0f)
+  {
+    std::cout << "No duration found! using partials range " << newPartials->stats.timeRange << "\n";
+    newPartials->sourceDuration = newPartials->stats.timeRange.mX2;
+  }
+  
   return newPartials;
 }
 
