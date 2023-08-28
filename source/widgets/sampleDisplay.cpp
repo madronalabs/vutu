@@ -269,10 +269,9 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
     nvgFill(nvg);
   }
   
-  bool sampleOK = _pSample && _pSample->data.size();
-  if(sampleOK)
+  if(usable(_pSample))
   {
-    size_t frames = _pSample->data.size();
+    size_t frames = getFrames(*_pSample);
     size_t sr = _pSample->sampleRate;
     
     Interval frameInterval{0, float(frames - 1)};
@@ -300,7 +299,7 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
     for(int x=0; x<w; ++x)
     {
       int frame = clamp(size_t(xToFrame(x)), 0UL, frames);
-      float amp = _pSample->data[frame];
+      float amp = (*_pSample)[frame];
       float thickness = ampToThickness(amp);
       nvgMoveTo(nvg, x, yCenter - thickness);
       nvgLineTo(nvg, x, yCenter + thickness);
@@ -355,12 +354,10 @@ void SampleDisplay::draw(ml::DrawContext dc)
   
   if(!_backingLayer) return;
   
-  bool sampleOK = _pSample && _pSample->data.size();
-  if(sampleOK)
+  if(usable(_pSample))
   {
-    auto sampleDuration = (float)_pSample->frames / (float)_pSample->sampleRate;
+    auto sampleDuration = getDuration(*_pSample);
     auto timeToX = projections::linear({0, sampleDuration}, xRange);
-    size_t frames = _pSample->data.size();
     size_t sr = _pSample->sampleRate;
     Interval frameInterval = currentValue*sr;
 

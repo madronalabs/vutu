@@ -82,7 +82,7 @@ VutuController::~VutuController()
 
 void VutuController::setButtonEnableStates()
 {
-  bool sourceOK = (_sourceSample.data.size() > 0);
+  bool sourceOK = getSize(_sourceSample) > 0;
   sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", sourceOK});
   sendMessageToActor(_viewName, {"widget/analyze/set_prop/enabled", sourceOK});
   
@@ -91,8 +91,8 @@ void VutuController::setButtonEnableStates()
   sendMessageToActor(_viewName, {"widget/synthesize/set_prop/enabled", partialsOK});
   sendMessageToActor(_viewName, {"widget/export/set_prop/enabled", partialsOK});
   
-  sendMessageToActor(_viewName, {"widget/play_synth/set_prop/enabled", (_synthesizedSample.data.size() > 0)});
-  sendMessageToActor(_viewName, {"widget/export_synth/set_prop/enabled", (_synthesizedSample.data.size() > 0)});
+  sendMessageToActor(_viewName, {"widget/play_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
+  sendMessageToActor(_viewName, {"widget/export_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
 }
 
 void VutuController::_debug()
@@ -173,8 +173,8 @@ int VutuController::saveSampleToWavFile(const Sample& sample, Path wavPath)
 
   // write samples
   // mono only, for now!
-  size_t frames = _synthesizedSample.data.size();
-  auto writeResult = sf_writef_float(sndfile, _synthesizedSample.data.data(), frames);
+  size_t frames = getFrames(_synthesizedSample);
+  auto writeResult = sf_writef_float(sndfile, getFramePtr(_synthesizedSample), frames);
   if(writeResult == frames)
   {
     OK = true;
@@ -203,21 +203,23 @@ int VutuController::loadSampleFromPath(Path samplePath)
     if(file)
     {
       constexpr size_t kMaxSeconds = 8;
-      size_t fileSizeInFrames = fileInfo.frames;
       size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
-      
-      size_t framesToRead = std::min(fileSizeInFrames, kMaxFrames);
-      size_t samplesToRead = framesToRead*fileInfo.channels;
-      
+      size_t framesToRead = std::min(size_t(fileInfo.frames), kMaxFrames);
       _printToConsole(TextFragment("loading ", filePathText, "..."));
       
-      _sourceSample.data.resize(samplesToRead);
-      pData = _sourceSample.data.data();
+      auto pData = resizeSampleData(_sourceSample, framesToRead, fileInfo.channels);
+      
+      //_sourceSample.data.resize(samplesToRead);
+      //pData = _sourceSample.data.data();
+      
       _sourceSample.sampleRate = fileInfo.samplerate;
       
       std::cout << "  file sr: " << _sourceSample.sampleRate << "\n";
       
-      framesRead = sf_readf_float(file, pData, static_cast<sf_count_t>(framesToRead));
+      if(pData)
+      {
+        framesRead = sf_readf_float(file, pData, static_cast<sf_count_t>(framesToRead));
+      }
       
       TextFragment readStatus;
       if(framesRead != framesToRead)
@@ -245,12 +247,11 @@ int VutuController::loadSampleFromPath(Path samplePath)
       {
         pData[i] = pData[i*fileInfo.channels];
       }
-      _sourceSample.data.resize(framesRead);
+      resizeSampleData(_sourceSample, framesRead, 1);
     }
     
     normalize(_sourceSample);
     _sourceSample.channels = 1;
-    _sourceSample.frames = framesRead;
     
     // set source duration and reset analysis interval to whole source length
     sourceDuration = framesRead/float(_sourceSample.sampleRate);
@@ -509,7 +510,7 @@ int VutuController::analyzeSample()
 {
   int status{ false };
   
-  auto totalFrames = _sourceSample.frames;
+  auto totalFrames = getFrames(_sourceSample);
   if(!totalFrames) return status;
   
   auto interval = params.getRealValue("analysis_interval").getIntervalValue();
@@ -525,7 +526,7 @@ int VutuController::analyzeSample()
   int srcStart = frameInterval.mX1;
   for(int i=0; i<framesInInterval; ++i)
   {
-    vx[i] = _sourceSample.data[srcStart + i];
+    vx[i] = _sourceSample[srcStart + i];
   }
   
   // fade in
@@ -647,42 +648,46 @@ void VutuController::synthesize()
   synthParams.sampleRate = kSampleRate;
   const float kFadeTime = 0.001f;
 
+  // get frames in analysis interval to use for output length. Length of synthesis will be shorter.
   Interval analysisInterval = params.getRealValue("analysis_interval").getIntervalValue();
   float duration = _vutuPartials->sourceDuration*(analysisInterval.mX2 -  analysisInterval.mX1);
-  int framesInInterval = duration*synthParams.sampleRate;
+  int framesAnalyzed = duration*synthParams.sampleRate;
   
   // run the Loris synthesizer
   Loris::Synthesizer synth(synthParams, destSamples);
   synth.setFadeTime(kFadeTime);
   synth.synthesize(_lorisPartials->begin(), _lorisPartials->end());
   
-  // convert destSamples to floats
-  std::cout << "VutuController: synthesize: " << destSamples.size() << "samples synthesized. \n";
-  if(!destSamples.size()) return;
-  
-  size_t framesSynthesized = destSamples.size();
-  int fadeSamples = min(size_t(kFadeTime*kSampleRate), framesSynthesized/2);
+  std::cout << "VutuController: synthesize: " << destSamples.size() << "samples synthesized. " << framesAnalyzed << " frames analyzed. \n";
 
-  _synthesizedSample.data.resize(framesSynthesized);
-  _synthesizedSample.frames = framesSynthesized;
-  for(int i=0; i<framesSynthesized; ++i)
+  // resize and zero-pad output to fill entire interval
+  if(!destSamples.size()) return;
+  destSamples.resize(framesAnalyzed);
+  
+  // convert to floats
+  size_t outputFrames = destSamples.size();
+  int fadeSamples = min(size_t(kFadeTime*kSampleRate), outputFrames/2);
+  
+  resizeSampleData(_synthesizedSample, outputFrames, 1);
+  
+  for(int i=0; i<outputFrames; ++i)
   {
-    _synthesizedSample.data[i] = destSamples[i];
+    _synthesizedSample[i] = destSamples[i];
   }
 
   // fade in
   for(int i=0; i<fadeSamples; ++i)
   {
     double gain = (double)i / (double)fadeSamples;
-    _synthesizedSample.data[i] *= gain;
+    _synthesizedSample[i] *= gain;
   }
   
   // fade out
   for(int i=0; i<fadeSamples; ++i)
   {
-    int i2 = framesSynthesized - 1 - i;
+    int i2 = outputFrames - 1 - i;
     double gain = (double)i / (double)fadeSamples;
-    _synthesizedSample.data[i2] *= gain;
+    _synthesizedSample[i2] *= gain;
   }
 
   normalize(_synthesizedSample);
@@ -766,8 +771,7 @@ void VutuController::onMessage(Message m)
         case(hash("export_synth")):
         {
           // save synthesized audio to a file
-          bool audioOK = (_synthesizedSample.data.size() > 0);
-          if(audioOK)
+          if(getSize(_synthesizedSample))
           {
             if(auto savePath = showSaveDialog("audio"))
             {
@@ -782,7 +786,7 @@ void VutuController::onMessage(Message m)
         {
           _clearPartialsData();
           _clearSynthesizedSample();
-          if(_sourceSample.data.size() > 0)
+          if(getSize(_sourceSample))
           {
             analyzeSample();
           }

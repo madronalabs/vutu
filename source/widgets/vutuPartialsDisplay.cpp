@@ -67,7 +67,7 @@ MessageList VutuPartialsDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc
     Rect bounds = getLocalBounds(dc, *this);
     int w = bounds.width();
     int h = bounds.height();
-    //std::cout << "VutuPartialsDisplay::resize: " << w << " x " << h << ", diff = " << maxDiff << "\n";
+    std::cout << "VutuPartialsDisplay::resize: " << w << " x " << h <<  "\n";
     
     _backingLayer = ml::make_unique< Layer >(nvg, w, h);
     
@@ -161,16 +161,24 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     // projections::printTable(ampToThickness, "ampToThickness", ampRange, 5);
     auto bandwidthToUnity = projections::linear(_pPartials->stats.bandwidthRange, {0, 1});
     
-    auto sineColor = rgba(0, 1, 0, 0.5f);
-    nvgStrokeColor(nvg, sineColor);
-    nvgStrokeWidth(nvg, strokeWidth);
-
+    /*
+    auto testColor = rgba(1, 1, 1, 0.5f);
+    nvgStrokeColor(nvg, testColor);
+    nvgStrokeWidth(nvg, strokeWidth*5);
+    nvgBeginPath(nvg);
+    nvgX(nvg, Rect(0, 0, w, h));
+    nvgStroke(nvg);
+*/
+    
     // time the partials bit
     auto roughStart = high_resolution_clock::now();
     size_t totalFramesDrawn{0};
     
     // draw frame ribs, always separated vby at least kMinLineLength
     nvgBeginPath(nvg);
+    auto sineColor = rgba(0, 1, 0, 0.5f);
+    nvgStrokeColor(nvg, sineColor);
+    nvgStrokeWidth(nvg, strokeWidth);
     for(int p=0; p<nPartials; ++p)
     {
       const auto& partial = _pPartials->partials[p];
@@ -293,7 +301,7 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     // draw noise Xs
     nvgBeginPath(nvg);
     nvgStrokeWidth(nvg, strokeWidth);
-    auto xColor(rgba(0, 1, 0, 0.5));
+    auto xColor(rgba(0, 1, 0, 1.0));
     nvgStrokeColor(nvg, xColor);
     for(int p=0; p<nPartials; ++p)
     {
@@ -344,8 +352,6 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
   Interval xRange{0.f, w - 1.f};
   Interval yRange{h - 1.f, 0.f};
 
-  Interval analysisInterval = getParamValue("analysis_interval").getIntervalValue();
-  
   // background
   {
     nvgBeginPath(nvg);

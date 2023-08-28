@@ -27,19 +27,15 @@ constexpr float kLevelLo = 0.5f, kLevelHi = 2.f;
 
 size_t getStartFrame(const ml::Sample& sample, Interval srcInterval)
 {
-  auto totalFrames = float(sample.frames);
-  auto interval = srcInterval * totalFrames;
+  auto interval = srcInterval * getFrames(sample);
   return interval.mX1;
 }
 
 size_t getEndFrame(const ml::Sample& sample, Interval srcInterval)
 {
-  auto totalFrames = float(sample.frames);
-  auto interval = srcInterval * totalFrames;
+  auto interval = srcInterval * getFrames(sample);
   return interval.mX2;
 }
-
-
 
 
 void readParameterDescriptions(ParameterDescriptionList& params)
@@ -148,16 +144,17 @@ void readParameterDescriptions(ParameterDescriptionList& params)
 }
 
 // TODO sample utilities
+// TODO channels > 1
 void resample(const ml::Sample* pSrc, ml::Sample* pDest)
 {
-  int srcLen = pSrc->data.size();
-  if(!srcLen) return;
+  if(!usable(pSrc)) return;
   
-  double factor = double(pDest->sampleRate) / double(pSrc->sampleRate);
+  int srcLen = getFrames(*pSrc);
+  double factor = getRate(*pDest) / getRate(*pSrc);
     
+  // make mono sample
   int expectedLen = (int)(srcLen * factor);
-  int dstLen = expectedLen;
-  pDest->data.resize(expectedLen);
+  resizeSampleData(*pDest, expectedLen, 1);
 
   constexpr int srcBlockSize{1024};
   constexpr int destBlockSize{1024};
@@ -173,9 +170,9 @@ void resample(const ml::Sample* pSrc, ml::Sample* pDest)
     int lastFlag = (srcBlock == srcLen-srcIdx);
     
     resampled = resample_process(resamplerHandle, factor,
-                         &pSrc->data[srcIdx], srcBlock,
+                         getConstFramePtr(*pSrc, srcIdx), srcBlock,
                          lastFlag, &srcSamplesUsed,
-                         &pDest->data[destIdx], std::min(dstLen-destIdx, destBlockSize));
+                         getFramePtr(*pDest, destIdx), std::min(expectedLen-destIdx, destBlockSize));
     srcIdx += srcSamplesUsed;
     if (resampled >= 0)
       destIdx += resampled;
@@ -198,10 +195,7 @@ void resample(const ml::Sample* pSrc, ml::Sample* pDest)
     std::cout << "   Expected " << expectedLen << " samples, got " << destIdx << " out\n";
   }
   
-  // mono only!
-  pDest->frames = pDest->data.size();
-  
-  std::cout << "resampled: " << pSrc->data.size() << " -> " << pDest->data.size() << "\n";
+  std::cout << "resampled: " << getSize(*pSrc) << " -> " << getSize(*pDest) << "\n";
   
 }
 
@@ -278,9 +272,9 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
 
   if(samplePlaying)
   {
-    if(samplePlaying->frames > 0)
+    if(getFrames(*samplePlaying) > 0)
     {
-      load(sampleVec, &(samplePlaying->data[playbackSampleIdx]));
+      load(sampleVec, getFramePtr(*samplePlaying, playbackSampleIdx));
       playbackSampleIdx += kFloatsPerDSPVector;
     }
     
@@ -317,7 +311,7 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
   {
     if(prevState != "source")
     {
-      if(_sourceSample.frames > 0)
+      if(getFrames(_sourceSample) > 0)
       {
         // start playback at analysis interval start
         playbackState = "source";
@@ -331,7 +325,7 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
   {
     if(prevState != "synth")
     {
-      if(_pSynthesizedSample && _pSynthesizedSample->data.size() > 0)
+      if(usable(_pSynthesizedSample))
       {
         // synthesized sample always starts from beginning
         playbackState = "synth";

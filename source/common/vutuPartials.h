@@ -55,14 +55,14 @@ struct VutuPartialsData
   
   // source and analysis parameters
   TextFragment sourceFile;
-  float sourceDuration; // whole duration of source, will be longer than stats.timeRange
-  float resolution;
-  float windowWidth;
-  float ampFloor;
-  float freqDrift;
-  float loCut;
-  float hiCut;
-  float fundamental;
+  float sourceDuration{0}; // whole duration of source, will be longer than stats.timeRange
+  float resolution{0};
+  float windowWidth{0};
+  float ampFloor{0};
+  float freqDrift{0};
+  float loCut{0};
+  float hiCut{0};
+  float fundamental{0};
 };
 
 struct PartialFrame
