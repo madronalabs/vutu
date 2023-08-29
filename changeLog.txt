@@ -1,6 +1,12 @@
 
 Vutu change log
 -------------------------
+
+version 0.9.7: Aug 28, 2023
+- added source in/out GUI
+- improved partials drawing
+- fixed play click at end bug
+
 version 0.9.6: Jun 17, 2023
 - added fundamental pitch setting
 - added noise width

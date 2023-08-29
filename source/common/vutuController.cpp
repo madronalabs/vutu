@@ -82,9 +82,8 @@ VutuController::~VutuController()
 
 void VutuController::setButtonEnableStates()
 {
-  bool sourceOK = getSize(_sourceSample) > 0;
-  sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", sourceOK});
-  sendMessageToActor(_viewName, {"widget/analyze/set_prop/enabled", sourceOK});
+  sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", usable(&_sourceSample)});
+  sendMessageToActor(_viewName, {"widget/analyze/set_prop/enabled", usable(&_sourceSample)});
   
   Loris::PartialList* pLorisPartials = _lorisPartials.get();
   bool partialsOK = pLorisPartials && (pLorisPartials->size() > 0);
@@ -106,13 +105,6 @@ void VutuController::_printToConsole(TextFragment t)
 {
   sendMessageToActor(_viewName, {"info/set_prop/text", t});
 }
-
-
-void VutuController::clearSourceSample()
-{
-  clear(_sourceSample);
-}
-
 
 void VutuController::broadcastSourceSample()
 {
@@ -230,7 +222,8 @@ int VutuController::loadSampleFromPath(Path samplePath)
       {
         TextFragment truncatedMsg = (framesToRead == kMaxFrames) ? "(truncated)" : "";
         TextFragment sampleRate(" sr = ", textUtils::naturalNumberToText(_sourceSample.sampleRate));
-        readStatus = (TextFragment(textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg, sampleRate ));
+        TextFragment fileName = last(samplePath).getTextFragment();
+        readStatus = TextFragment(fileName, ": ", textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg, sampleRate );
         OK = true;
       }
       
@@ -241,21 +234,18 @@ int VutuController::loadSampleFromPath(Path samplePath)
     sourceFileLoaded = fileToLoad;
 
     // deinterleave in place to extract first channel if needed
-    if(pData && fileInfo.channels > 1)
+    if(usable(&_sourceSample) && _sourceSample.channels > 1)
     {
+      
       for(int i=0; i < framesRead; ++i)
       {
-        pData[i] = pData[i*fileInfo.channels];
+        _sourceSample[i] = _sourceSample[i*_sourceSample.channels];
       }
       resizeSampleData(_sourceSample, framesRead, 1);
     }
     
     normalize(_sourceSample);
-    _sourceSample.channels = 1;
-    
-    // set source duration and reset analysis interval to whole source length
-    sourceDuration = framesRead/float(_sourceSample.sampleRate);
-    //analysisInterval = {0.f, 1.f};
+
   }
   return OK;
 }
@@ -266,15 +256,9 @@ TextFragment floatToText(float f) { return textUtils::floatNumberToText(f); }
 void VutuController::showAnalysisInfo()
 {
   VutuPartialsData* p = _vutuPartials.get();
+
   
-  //TextFragment a(analysisInterval);
-  
-  //TextFragment a("analyzed ", p->stats.nPartials, ");
-                   
-  Path pathLoaded = sourceFileLoaded.getFullPath();
-  Path shortName = last(pathLoaded);
-  
-  TextFragment a(pathToText(shortName));
+  TextFragment a(p->sourceFile);
   TextFragment b(" [", floatToText(p->stats.timeRange.mX1), " -- " ,floatToText(p->stats.timeRange.mX2), "] " );
   TextFragment c("partials: ", intToText(p->stats.nPartials));
   TextFragment d(" max freq: ", intToText(p->stats.freqRange.mX2));
@@ -284,16 +268,21 @@ void VutuController::showAnalysisInfo()
   _printToConsole(out);
 }
 
+void VutuController::setAnalysisParamsFromPartials()
+{
+  VutuPartialsData* p = _vutuPartials.get();
+  
+  params.setFromRealValue("fundamental", p->fundamental);
+  broadcastParam("fundamental", 0);
+
+}
+
 int VutuController::loadPartialsFromPath(Path partialsPath)
 {
   int OK{ false };
   File fileToLoad(partialsPath);
   if(fileToLoad)
   {
-//    TextFragment partialsText;
-//    fileToLoad.loadAsText(partialsText);
-    
-//    auto partialsJSON = textToJSON(partialsText);
     if(VutuPartialsData* newPartials = loadVutuPartialsFromFile(fileToLoad))
     {
       // transfer ownership of new partials to _vutuPartials and delete previous
@@ -305,10 +294,8 @@ int VutuController::loadPartialsFromPath(Path partialsPath)
      
     //std::cout << "text: " << partialsText << "\n";
   }
-  
   return OK;
 }
-
 
 
 Path VutuController::showLoadDialog(Symbol fileType)
@@ -616,7 +603,8 @@ int VutuController::analyzeSample()
     showAnalysisInfo();
     
     // store analysis params used
-    _vutuPartials->sourceDuration = sourceDuration;
+    _vutuPartials->sourceFile = sourceFileLoaded.getShortName();
+    _vutuPartials->sourceDuration = getDuration(_sourceSample);
     _vutuPartials->resolution = res;
     _vutuPartials->windowWidth = width;
     _vutuPartials->ampFloor = floor;
@@ -628,11 +616,6 @@ int VutuController::analyzeSample()
     // convert back to loris partials after cutHighs (hack-ish)
     _sumuToLorisPartials(_vutuPartials.get(), _lorisPartials.get());
     
-    // add info
-    
-    Path pathLoaded = sourceFileLoaded.getFullPath();
-    Path shortName = last(pathLoaded);
-    _vutuPartials->sourceFile = pathToText(shortName);
   }
   return status;
 }
@@ -750,7 +733,7 @@ void VutuController::onMessage(Message m)
           broadcastSynthesizedSample();
           setButtonEnableStates();
 
-          params.setRealValue("analysis_interval", Interval{0, 1});
+          params.setValue("analysis_interval", Interval{0, 1});
           broadcastParam("analysis_interval", 0);
 
           messageHandled = true;
@@ -885,19 +868,20 @@ void VutuController::onMessage(Message m)
               _sumuToLorisPartials(_vutuPartials.get(), _lorisPartials.get() );
               
               // clear source sample so all data is consistent
-              clearSourceSample();
+              clear(_sourceSample);
               broadcastSourceSample();
               
-              // clear synthesized sample and sync UI
+              // clear synthesized sample and sync UI and params
               _clearSynthesizedSample();
               broadcastPartialsData();
               broadcastSynthesizedSample();
               setButtonEnableStates();
+              setAnalysisParamsFromPartials();
+              
               
               // set interval to whole partials file and broadcast
-              params.setRealValue("analysis_interval", Interval{0, 1});
+              params.setValue("analysis_interval", Interval{0, 1});
               broadcastParam("analysis_interval", 0);
-
             }
           }
           messageHandled = true;

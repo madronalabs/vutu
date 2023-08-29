@@ -44,7 +44,6 @@ private:
 
   ml::Sample _sourceSample;
   ml::Sample _synthesizedSample;
-  float sourceDuration{0};
 
   std::unique_ptr< Loris::PartialList > _lorisPartials;
   std::unique_ptr< VutuPartialsData > _vutuPartials;
@@ -60,8 +59,8 @@ private:
   void saveTextToPath(const TextFragment& text, Path savePath);
 
   void showAnalysisInfo();
-  
-  void clearSourceSample();
+  void setAnalysisParamsFromPartials();
+
   int _loadSampleFromDialog();
   int analyzeSample();
   void broadcastSourceSample();

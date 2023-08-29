@@ -585,6 +585,10 @@ inline VutuPartialsData* jsonToVutuPartials(JSONHolder& jsonData)
             pVutuPartials->fundamental = obj->valuedouble;
             break;
         }
+        
+        // TEMP
+        std::cout << " loaded JSON " << objStr << " : " << obj->valuedouble << "\n";
+
         break;
       }
       case cJSON_String:
