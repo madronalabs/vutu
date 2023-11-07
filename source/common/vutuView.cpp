@@ -188,7 +188,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     } );
   };
   addControlLabel("resolution_label", "resolution");
-  addControlLabel("window_width_label", "window width");
+  addControlLabel("window_width_label", "window freq.");
   addControlLabel("amp_floor_label", "amp floor");
   addControlLabel("freq_drift_label", "freq. drift");
   addControlLabel("lo_cut_label", "lo cut");

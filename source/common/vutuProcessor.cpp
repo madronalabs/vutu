@@ -154,7 +154,7 @@ void resample(const ml::Sample* pSrc, ml::Sample* pDest)
     
   // make mono sample
   int expectedLen = (int)(srcLen * factor);
-  resizeSampleData(*pDest, expectedLen, 1);
+  resize(*pDest, expectedLen, 1);
 
   constexpr int srcBlockSize{1024};
   constexpr int destBlockSize{1024};

@@ -194,12 +194,12 @@ int VutuController::loadSampleFromPath(Path samplePath)
     auto file = sf_open(filePathText.getText(), SFM_READ, &fileInfo);
     if(file)
     {
-      constexpr size_t kMaxSeconds = 8;
+      constexpr size_t kMaxSeconds = 30;
       size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
       size_t framesToRead = std::min(size_t(fileInfo.frames), kMaxFrames);
       _printToConsole(TextFragment("loading ", filePathText, "..."));
       
-      auto pData = resizeSampleData(_sourceSample, framesToRead, fileInfo.channels);
+      auto pData = resize(_sourceSample, framesToRead, fileInfo.channels);
       
       //_sourceSample.data.resize(samplesToRead);
       //pData = _sourceSample.data.data();
@@ -241,7 +241,7 @@ int VutuController::loadSampleFromPath(Path samplePath)
       {
         _sourceSample[i] = _sourceSample[i*_sourceSample.channels];
       }
-      resizeSampleData(_sourceSample, framesRead, 1);
+      resize(_sourceSample, framesRead, 1);
     }
     
     normalize(_sourceSample);
@@ -526,7 +526,7 @@ int VutuController::analyzeSample()
   // fade out
   for(int i=0; i<fadeSamples; ++i)
   {
-    int i2 = srcStart + framesInInterval - 1 - i;
+    int i2 = framesInInterval - 1 - i;
     double gain = (double)i / (double)fadeSamples;
     vx[i2] *= gain;
   }
@@ -651,7 +651,7 @@ void VutuController::synthesize()
   size_t outputFrames = destSamples.size();
   int fadeSamples = min(size_t(kFadeTime*kSampleRate), outputFrames/2);
   
-  resizeSampleData(_synthesizedSample, outputFrames, 1);
+  resize(_synthesizedSample, outputFrames, 1);
   
   for(int i=0; i<outputFrames; ++i)
   {

@@ -251,7 +251,7 @@ inline void calcStats(VutuPartialsData& p)
   p.stats.maxActivePartials = maxActive;
   p.stats.maxActiveTime = maxActiveTime;
   
-  std::cout << "\n\n max active partials: " << p.stats.maxActivePartials <<  " at time: " << p.stats.maxActiveTime << "\n";
+  std::cout << "max active partials: " << p.stats.maxActivePartials <<  " at time: " << p.stats.maxActiveTime << "\n";
 }
 
 // get an interpolated frame of data from the partial index p of the VutuPartialsData at time t.
@@ -499,7 +499,7 @@ inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int 
 //
 inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& binaryData)
 {
-  VutuPartialsData* partials = new VutuPartialsData;
+  VutuPartialsData* partialsData = new VutuPartialsData;
   const uint8_t* pData{binaryData.data()};
 
   Tree<Value> tree = binaryToValueTree(binaryData);
@@ -510,31 +510,31 @@ inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& 
     
     if(nPartials > 0)
     {
-      partials->version = tree["version"].getIntValue();
-      partials->sourceDuration = tree["source_duration"].getFloatValue();
-      partials->resolution = tree["resolution"].getFloatValue();
-      partials->windowWidth = tree["window_width"].getFloatValue();
-      partials->ampFloor = tree["amp_floor"].getFloatValue();
-      partials->freqDrift = tree["freq_drift"].getFloatValue();
-      partials->loCut = tree["lo_cut"].getFloatValue();
-      partials->hiCut = tree["hi_cut"].getFloatValue();
-      partials->fundamental = tree["fundamental"].getFloatValue();
+      partialsData->version = tree["version"].getIntValue();
+      partialsData->sourceDuration = tree["source_duration"].getFloatValue();
+      partialsData->resolution = tree["resolution"].getFloatValue();
+      partialsData->windowWidth = tree["window_width"].getFloatValue();
+      partialsData->ampFloor = tree["amp_floor"].getFloatValue();
+      partialsData->freqDrift = tree["freq_drift"].getFloatValue();
+      partialsData->loCut = tree["lo_cut"].getFloatValue();
+      partialsData->hiCut = tree["hi_cut"].getFloatValue();
+      partialsData->fundamental = tree["fundamental"].getFloatValue();
 
-      partials->partials.resize(nPartials);
+      partialsData->partials.resize(nPartials);
       std::cout << "reading " << nPartials << " partials from binary\n";
       for(int i=0; i<nPartials; ++i)
       {
-        partials->partials[i].time = getPartialDataFromTree(tree, i, "time");
-        partials->partials[i].amp = getPartialDataFromTree(tree, i, "amp");
-        partials->partials[i].freq = getPartialDataFromTree(tree, i, "freq");
-        partials->partials[i].bandwidth = getPartialDataFromTree(tree, i, "bw");
-        partials->partials[i].phase = getPartialDataFromTree(tree, i, "phase");
+        partialsData->partials[i].time = getPartialDataFromTree(tree, i, "time");
+        partialsData->partials[i].amp = getPartialDataFromTree(tree, i, "amp");
+        partialsData->partials[i].freq = getPartialDataFromTree(tree, i, "freq");
+        partialsData->partials[i].bandwidth = getPartialDataFromTree(tree, i, "bw");
+        partialsData->partials[i].phase = getPartialDataFromTree(tree, i, "phase");
       }
     }
   }
 
-  calcStats(*partials);
-  return partials;
+  calcStats(*partialsData);
+  return partialsData;
 }
 
 // parse the JSON and return a new VutuPartialsData object.
