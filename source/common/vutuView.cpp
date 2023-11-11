@@ -304,7 +304,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
     {"action", "toggle_play_synth" }
   } );
   _view->_widgets.add_unique< TextButtonBasic >("export_synth", WithValues{
-    {"text", "export" },
+    {"text", "export WAV" },
     {"action", "export_synth" }
   } );
 
