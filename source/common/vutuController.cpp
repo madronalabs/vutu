@@ -194,7 +194,7 @@ int VutuController::loadSampleFromPath(Path samplePath)
     auto file = sf_open(filePathText.getText(), SFM_READ, &fileInfo);
     if(file)
     {
-      constexpr size_t kMaxSeconds = 30;
+      constexpr size_t kMaxSeconds = 60;
       size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
       size_t framesToRead = std::min(size_t(fileInfo.frames), kMaxFrames);
       _printToConsole(TextFragment("loading ", filePathText, "..."));
@@ -220,10 +220,13 @@ int VutuController::loadSampleFromPath(Path samplePath)
       }
       else
       {
+        float sr = _sourceSample.sampleRate;
         TextFragment truncatedMsg = (framesToRead == kMaxFrames) ? "(truncated)" : "";
+        TextFragment framesMsg (textUtils::naturalNumberToText(framesRead), " frames read ");
+        TextFragment secondsMsg ("(", textUtils::floatNumberToText((framesRead + 0.f)/sr, 2), " seconds) ");
         TextFragment sampleRate(" sr = ", textUtils::naturalNumberToText(_sourceSample.sampleRate));
         TextFragment fileName = last(samplePath).getTextFragment();
-        readStatus = TextFragment(fileName, ": ", textUtils::naturalNumberToText(framesRead), " frames read ", truncatedMsg, sampleRate );
+        readStatus = TextFragment(fileName, ": ", framesMsg, secondsMsg, truncatedMsg, sampleRate );
         OK = true;
       }
       

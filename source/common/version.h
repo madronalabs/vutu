@@ -8,18 +8,18 @@
 #define SUB_VERSION_STR "9"
 #define SUB_VERSION_INT 9
 
-#define RELEASE_NUMBER_STR "7"
-#define RELEASE_NUMBER_INT 7
+#define RELEASE_NUMBER_STR "8"
+#define RELEASE_NUMBER_INT 8
 
 #define BETA_NUMBER_STR "0"
 #define BETA_NUMBER_INT 0
 
 #define BUILD_NUMBER_INT 0
 
-#define SHORT_VERSION_STR "0.9.7"
+#define SHORT_VERSION_STR "0.9.8"
 #define VERSION_STR  SHORT_VERSION_STR
 
-#define FULL_VERSION_STR "0.9.7"
+#define FULL_VERSION_STR "0.9.8"
 
 #if defined(__x86_64__) || defined(_M_X64)
   #define ML_ARCH "x86_64"
