@@ -18,7 +18,6 @@
 
 #include "mlvg.h"
 #include "miniz.h"
-#include "nfd.h"
 
 // Loris includes
 #include "loris.h"
@@ -301,82 +300,6 @@ int VutuController::loadPartialsFromPath(Path partialsPath)
 }
 
 
-Path VutuController::showLoadDialog(Symbol fileType)
-{
-  Path returnVal{};
-  nfdchar_t *outPath;
-  std::string sourcePath;
-  
-  nfdresult_t result;
-  File defaultLocation;
-  switch(hash(fileType))
-  {
-    case(hash("samples")):
-    {
-      if(recentSamplesPath)
-      {
-        defaultLocation = File(recentSamplesPath);
-      }
-      else
-      {
-        defaultLocation = File(getApplicationDataRoot(getMakerName(), getAppName(), "samples"));
-      }
-      auto defaultPathText = defaultLocation.getFullPathAsText();
-
-      nfdfilteritem_t filterItem[2] = { { "WAV audio", "wav" }, { "AIFF audio", "aiff,aif,aifc" } };
-      result = NFD_OpenDialog(&outPath, filterItem, 2, defaultPathText.getText());
-      break;
-    }
-    case(hash("partials")):
-    {
-      if(recentPartialsPath)
-      {
-        defaultLocation = File(recentPartialsPath);
-      }
-      else
-      {
-        defaultLocation = File(getApplicationDataRoot(getMakerName(), getAppName(), "partials"));
-      }
-      auto defaultPathText = defaultLocation.getFullPathAsText();
-      nfdfilteritem_t filterItem[1] = { { "JSON data", "utu" } };
-      result = NFD_OpenDialog(&outPath, filterItem, 1, defaultPathText.getText());
-      break;
-    }
-  }
-  
-  if (result == NFD_OKAY)
-  {
-    returnVal = Path(outPath);
-    
-    switch(hash(fileType))
-    {
-      case(hash("samples")):
-      {
-        recentSamplesPath = returnVal;
-        break;
-      }
-      case(hash("partials")):
-      {
-        recentPartialsPath = returnVal;
-        break;
-      }
-    }
-      
-    NFD_FreePath(outPath);
-  }
-  else if (result == NFD_CANCEL)
-  {
-    puts("User pressed cancel.");
-  }
-  else
-  {
-    printf("Error: %s\n", NFD_GetError());
-  }
-  
-  return returnVal;
-}
-
-
 std::vector<TextFragment> extensionsForFileType(Symbol fileType)
 {
   std::vector<TextFragment> r;
@@ -408,68 +331,6 @@ TextFragment getFileDescription(TextFragment extension)
   return desc;
 }
 
-Path VutuController::showSaveDialog(Symbol fileType)
-{
-  Path returnVal{};
-  File fileTypeRoot(getApplicationDataRoot(getMakerName(), getAppName(), fileType));
-  
-  std::cout << "root dir: " << fileTypeRoot.getFullPathAsText() << "\n";
-  
-  if(!fileTypeRoot.exists())
-  {
-    // make directory
-    Symbol r = fileTypeRoot.createDirectory();
-    if(r != "OK")
-    {
-      // TODO present error
-      std::cout << "create directory failed: " << r << "\n";
-    }
-  }
-  
-  if(fileTypeRoot.exists())
-  {
-    auto rootText = fileTypeRoot.getFullPathAsText();
-    
-    nfdchar_t* savePathAsString;
-    Path savePath;
-    
-    Path currentPath = "default";//textToPath(_params["current_patch"].getTextValue());
-    Symbol currentName = last(currentPath);
-    auto ext = extensionsForFileType(fileType);
-    TextFragment defaultName (currentName.getTextFragment());
-    
-    // prepare filters for the dialog
-    const size_t kMaxFilters{4};
-    const int nFilters = std::min(ext.size(), kMaxFilters);
-    nfdfilteritem_t filterItems[kMaxFilters];
-    
-    for(int i=0; i<nFilters; ++i)
-    {
-      // set filter item description and extension
-      auto extItem = ext[i].getText();
-      filterItems[i] = {getFileDescription(extItem).getText(), extItem};
-    }
-    
-    // show the dialog
-    nfdresult_t result = NFD_SaveDialog(&savePathAsString, filterItems, nFilters, rootText.getText(), defaultName.getText());
-    if (result == NFD_OKAY)
-    {
-      puts(savePathAsString);
-      savePath = Path(savePathAsString);
-      NFD_FreePath(savePathAsString);
-      returnVal = savePath;
-    }
-    else if (result == NFD_CANCEL)
-    {
-      puts("User pressed cancel.");
-    }
-    else
-    {
-      printf("Error: %s\n", NFD_GetError());
-    }
-  }
-  return returnVal;
-}
 
 void VutuController::saveTextToPath(const TextFragment& text, Path savePath)
 {
@@ -723,9 +584,18 @@ void VutuController::onMessage(Message m)
       {
         case(hash("open")):
         {
-          if(auto pathToLoad = showLoadDialog("samples"))
+          // load from saved origin or default
+          // TODO make a function
+          File loadOriginDir(recentSamplesPath);
+          if(!loadOriginDir)
           {
-            if(loadSampleFromPath(pathToLoad))
+            loadOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "");
+          }
+          auto loadPath = FileDialog::getFilePathForLoad(loadOriginDir.getFullPath(), "WAV audio:wav;AIFF audio:aiff,aif,aifc");
+          if(loadPath)
+          {
+            recentSamplesPath = loadPath;
+            if(loadSampleFromPath(loadPath))
             {
               _clearPartialsData();
               _clearSynthesizedSample();
@@ -759,8 +629,17 @@ void VutuController::onMessage(Message m)
           // save synthesized audio to a file
           if(getSize(_synthesizedSample))
           {
-            if(auto savePath = showSaveDialog("audio"))
+            File exportOriginDir(recentSamplesPath);
+            if(!exportOriginDir)
             {
+              exportOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "");
+            }
+            auto shortName = textUtils::stripExtension(sourceFileLoaded.getShortName());
+            if(!shortName) shortName = "audio-export";
+            auto savePath = FileDialog::getFilePathForSave(exportOriginDir.getFullPath(), TextFragment(shortName, ".wav"));
+            if(savePath)
+            {
+              recentSamplesPath = savePath;
               File saveFile (savePath);
               saveSampleToWavFile(_synthesizedSample, savePath);
             }
@@ -830,12 +709,22 @@ void VutuController::onMessage(Message m)
           bool partialsOK = pPartials && (pPartials->partials.size() > 0);
           if(partialsOK)
           {
-            if(auto savePath = showSaveDialog("partials"))
+            
+            File exportOriginDir(recentPartialsPath);
+            if(!exportOriginDir)
             {
-              std::cout << "saving to path: " << savePath << "\n";
+              exportOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "partials");
+            }
+            auto shortName = textUtils::stripExtension(sourceFileLoaded.getShortName());
+            if(!shortName) shortName = "partials-export";
+            auto savePath = FileDialog::getFilePathForSave(exportOriginDir.getFullPath(), TextFragment(shortName, ".utu"));
+            if(savePath)
+            {
               auto ext = getExtensionFromPath(savePath);
-              
+
+              std::cout << "saving to path: " << savePath << "\n";
               std::cout << "extension: " << ext << "\n";
+
               if(ext == "utu")
               {
                 // tuck current fundamental param value into partials data
@@ -846,6 +735,7 @@ void VutuController::onMessage(Message m)
                 File saveFile (savePath);
                 if(saveFile.hasWriteAccess())
                 {
+                  recentPartialsPath = savePath;
                   saveTextToPath(partialsText, savePath);
                 }
                 else
@@ -861,10 +751,17 @@ void VutuController::onMessage(Message m)
         }
         case(hash("import")):
         {
-          if(auto pathToLoad = showLoadDialog("partials"))
+          File loadOriginDir(recentPartialsPath);
+          if(!loadOriginDir)
           {
+            loadOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "partials");
+          }
+          auto loadPath = FileDialog::getFilePathForLoad(loadOriginDir.getFullPath(), "Partials:utu");
+          if(loadPath)
+          {
+            recentPartialsPath = loadPath;
             // load Sumu partials from JSON
-            if(loadPartialsFromPath(pathToLoad))
+            if(loadPartialsFromPath(loadPath))
             {
               // convert to Loris partials so we can use Loris to synthesize output
               _lorisPartials = std::make_unique< Loris::PartialList >();

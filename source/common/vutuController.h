@@ -48,9 +48,6 @@ private:
   std::unique_ptr< Loris::PartialList > _lorisPartials;
   std::unique_ptr< VutuPartialsData > _vutuPartials;
 
-  Path showLoadDialog(Symbol fileType);
-
-  Path showSaveDialog(Symbol fileType);
   int saveSampleToWavFile(const ml::Sample& signal, Path wavPath);
 
   int loadSampleFromPath(Path samplePath);
@@ -79,16 +76,11 @@ private:
   bool _changedFromRevertValues{true};
 
   // file paths
+  // TODO persist in app prefs
   Path recentSamplesPath;
   Path recentPartialsPath;
+  
   File sourceFileLoaded;
-  
-  // analysis / resynthesis interval
-  //Interval sourceInterval{0, 0};
-  //Interval analysisInterval{0, 0};
-  
-  TextFragment _partialsStatsText;
-
   
   Timer _debugTimer;
   void _debug();

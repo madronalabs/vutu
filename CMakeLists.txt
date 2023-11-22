@@ -167,7 +167,7 @@ add_library(${target} STATIC ${LIBRESAMPLE_SOURCES})
 target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
 
 #--------------------------------------------------------------------
-# make mlvg / SDL2 application target 
+# make mlvg application target 
 #--------------------------------------------------------------------
 
 set(target Vutu)
@@ -183,10 +183,8 @@ file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
 list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} )
 list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} )
 
-#--------------------------------------------------------------------
-# get icon file
-#--------------------------------------------------------------------
 
+# get icon file
 if(APPLE)
   # NOTE: Don't include the path in MACOSX_BUNDLE_ICON_FILE -- this is
   # the property added to Info.plist
@@ -251,12 +249,12 @@ if(APPLE)
 elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/${mlvg_NAME}.lib")
 endif()
+target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIRS})
 
 # add other external libraries
 target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
 
-#
-target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIRS})
+
 
 
 if(APPLE)
