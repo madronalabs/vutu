@@ -89,9 +89,9 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   
   params.push_back( ml::make_unique< ParameterDescription >(WithValues{
     { "name", "noise_width" },
-    { "range", {10, 500} },
-    { "plaindefault", 50 },
-    { "log", false },
+    { "range", {10, 5000} },
+    { "plaindefault", 500 },
+    { "log", true },
     { "units", "Hz" }
   } ) );
   

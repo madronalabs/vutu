@@ -2,6 +2,13 @@
 Vutu change log
 -------------------------
 
+version 0.9.10: Nov 30, 2023
+- increased noise width range
+
+version 0.9.9: Nov 22, 2023
+- added export button labels
+- changed UI lib for Mojave compatibility
+
 version 0.9.8: Nov 8, 2023
 - fixed bugs
 - increased max import time to 60s
