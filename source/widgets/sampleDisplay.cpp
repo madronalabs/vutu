@@ -298,7 +298,7 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
     
     for(int x=0; x<w; ++x)
     {
-      int frame = clamp(size_t(xToFrame(x)), 0UL, frames);
+      int frame = clamp(size_t(xToFrame(x)), size_t(0), frames);
       float amp = (*_pSample)[frame];
       float thickness = ampToThickness(amp);
       nvgMoveTo(nvg, x, yCenter - thickness);

@@ -22,8 +22,29 @@ project(Vutu)
 # Compiler flags
 #--------------------------------------------------------------------
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+ set(CMAKE_CXX_STANDARD 17)
+ set(CMAKE_CXX_STANDARD_REQUIRED True)
+ 
+ if(APPLE)
+   # For now, explicitly disable C++17 alignment feature
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-aligned-new")
+ elseif(WIN32)
+   # no unknown pragma warning
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4068")
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:alignedNew-")
+ endif()
+
+if(MSVC)
+    # arcane thing about setting runtime library flags
+    cmake_policy(SET CMP0091 NEW)
+
+    add_compile_options(
+        $<$<CONFIG:>:/MT>
+        $<$<CONFIG:Debug>:/MTd>
+        $<$<CONFIG:Release>:/MT>
+    )
+endif()
+
 
 #--------------------------------------------------------------------
 # find madronalib
@@ -167,7 +188,7 @@ add_library(${target} STATIC ${LIBRESAMPLE_SOURCES})
 target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
 
 #--------------------------------------------------------------------
-# make mlvg application target 
+# make mlvg /SDL2 application target 
 #--------------------------------------------------------------------
 
 set(target Vutu)
@@ -200,6 +221,27 @@ endif()
 
 add_executable(${target} ${vutu_ICON} ${app_sources})
 
+# find SDL headers and libraries
+if(APPLE)
+    # to use the SDL2 framework in /Library/Frameworks, do this:
+    find_package(SDL2 REQUIRED COMPONENTS SDL2)
+elseif(WIN32)
+    # it seems like there's no standard place to put the SDL dev tools on Windows.
+    # we put them in an SDL dir alongside the main project directory.
+    set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}/../SDL/include")
+    # Support both 32 and 64 bit builds
+    if (${CMAKE_SIZEOF_VOID_P} MATCHES 8)
+      set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/lib/x64")
+    else ()
+      set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/lib/x86")
+    endif ()
+endif()
+message("SDL2 headers should be in: " ${SDL2_INCLUDE_DIRS} )
+message("SDL2 libraries should be in: " ${SDL2_LIBRARIES_DIR} )
+target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
+target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2.lib")
+target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2main.lib")
+
 # add include dirs
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/common" )
@@ -208,22 +250,6 @@ target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/extern
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/libresample/include" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/../loris/src" )
-
-# to link the SDL2 dynamic library, hopefully installed on the target system, do as follows:
-# find_package(SDL2 REQUIRED)
-# target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
-# target_link_libraries(${target} PRIVATE ${SDL2_LIBRARIES})
-
-# to build SDL2 from source and link statically, do as follows:
-# set( SDL_STATIC ON CACHE BOOL "" FORCE )
-# set( SDL_SHARED OFF CACHE BOOL "" FORCE )
-# add_subdirectory( source/external/SDL )
-# target_link_libraries(${target} PRIVATE SDL2main SDL2-static)
-
-# to use the SDL2 framework in /Library/Frameworks, do this:
-find_package(SDL2 REQUIRED COMPONENTS SDL2)
-target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
-message("SDL2 headers should be in: " ${SDL2_INCLUDE_DIRS} )
 
 
 # add madronalib library
@@ -249,7 +275,7 @@ if(APPLE)
 elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/${mlvg_NAME}.lib")
 endif()
-target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIRS})
+target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 
 # add other external libraries
 target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
@@ -318,12 +344,11 @@ set_target_properties(
 elseif(WIN32)
     find_package(OpenGL REQUIRED)
     target_link_libraries(${target} PRIVATE ${OPENGL_gl_LIBRARY})
-    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
 endif()
 
 
 
-# copy SDL2.framework into bundle and codesign it
+# for Mac OS copy SDL2.framework into bundle and codesign it
 if(APPLE)
 
   set(APP_BUNDLE ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Vutu.app)
