@@ -701,7 +701,7 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
   }
   if(extension == "ut2")
   {
-    BinaryVector binaryData;
+    CharVector binaryData;
     if(fileToLoad.load(binaryData))
     {
       newPartials = binaryToVutuPartials(binaryData);
