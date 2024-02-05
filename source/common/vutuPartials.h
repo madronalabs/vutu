@@ -262,7 +262,7 @@ inline PartialFrame getPartialFrame(const VutuPartialsData& partialData, size_t 
   PartialFrame f;
   size_t nPartials = partialData.stats.nPartials;
   
-  if(within(partialIndex, 0UL, nPartials))
+  if(within(partialIndex, size_t(0), nPartials))
   {
     auto partial = partialData.partials[partialIndex];
     auto partialTimeRange = partialData.stats.partialTimeRanges[partialIndex];
@@ -314,7 +314,7 @@ inline PartialFrame getPartialFrameNearest(const VutuPartialsData& partialData, 
   PartialFrame f;
   size_t nPartials = partialData.stats.nPartials;
   
-  if(within(partialIndex, 0UL, nPartials))
+  if(within(partialIndex, size_t(0), nPartials))
   {
     auto partial = partialData.partials[partialIndex];
     auto partialTimeRange = partialData.stats.partialTimeRanges[partialIndex];
@@ -362,14 +362,14 @@ inline PartialFrame getPartialFrameByIndex(const VutuPartialsData& partialData, 
   PartialFrame f;
   size_t nPartials = partialData.stats.nPartials;
   
-  if(within(partialIndex, 0UL, nPartials))
+  if(within(partialIndex, size_t(0), nPartials))
   {
     auto partial = partialData.partials[partialIndex];
     size_t partialFrames = partial.time.size();
     
     //   std::cout << partialIndex << " range:" << partialTimeRange << "\n";
     
-    if(within(frameIndex, 0UL, partialFrames))
+    if(within(frameIndex, size_t(0), partialFrames))
     {
       // get data
       f.amp = partial.amp[frameIndex];
@@ -444,7 +444,7 @@ inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partial
   tree["fundamental"] = partialsData.fundamental;
 
   const size_t nPartials = partialsData.partials.size();
-  tree["n_partials"] = nPartials;
+  tree["n_partials"] = (unsigned long)nPartials;
 
   std::cout << "exporting " << nPartials << " partials as binary\n";
 
