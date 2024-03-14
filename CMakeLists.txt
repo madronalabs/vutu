@@ -9,7 +9,7 @@
 # Windows:
 # cmake -G"Visual Studio 14 2015 Win64" ..
 
-cmake_minimum_required (VERSION 3.16)
+cmake_minimum_required (VERSION 3.5)
 
 IF(APPLE)
   SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
@@ -55,8 +55,13 @@ if(APPLE)
   set (MADRONALIB_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/madronalib")
   set (MADRONALIB_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
 elseif(WIN32)
-  set (MADRONALIB_INCLUDE_DIR "C:/Program Files/madronalib/include")
-  set (MADRONALIB_LIBRARY_DIR "C:/Program Files/madronalib/lib")
+    if(EXISTS "C:/Program Files/madronalib/lib/madrona.lib")
+        set (MADRONALIB_INCLUDE_DIR "C:/Program Files/madronalib/include")
+        set (MADRONALIB_LIBRARY_DIR "C:/Program Files/madronalib/lib")
+    else()
+        set (MADRONALIB_INCLUDE_DIR "C:/Program Files (x86)/madronalib/include")
+        set (MADRONALIB_LIBRARY_DIR "C:/Program Files (x86)/madronalib/lib")
+    endif()
 else()
 endif()
 
@@ -65,8 +70,6 @@ set(madronalib_NAME madrona$<$<CONFIG:Debug>:-debug>)
 
 message("madronalib headers should be in: " ${MADRONALIB_INCLUDE_DIR} )
 message("madronalib library should be at: " ${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME} )
-
-message("cmake lib dir: " ${CMAKE_INSTALL_FULL_LIBDIR} )
 
 #--------------------------------------------------------------------
 # find loris library
@@ -193,8 +196,10 @@ target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
 
 set(target Vutu)
 
+# convert any small binary resources we need to .c files
 create_resources (source/resources build/resources/vutu)
- 
+
+# gather sources
 file(GLOB COMMON_SOURCES "${CMAKE_SOURCE_DIR}/source/common/*.cpp")
 file(GLOB COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/source/common/*.h")
 
@@ -204,6 +209,10 @@ file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
 list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} )
 list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} )
 
+if(APPLE)
+elseif(WIN32)
+    list(APPEND app_sources "${CMAKE_SOURCE_DIR}/source/windows/hidpi.manifest" )
+endif()
 
 # get icon file
 if(APPLE)
@@ -215,11 +224,11 @@ if(APPLE)
   set(vutu_ICON ${CMAKE_CURRENT_SOURCE_DIR}/source/mac/vutu.icns)
   set_source_files_properties(${vutu_ICON} PROPERTIES
          MACOSX_PACKAGE_LOCATION "Resources")
-  
 endif()
 
 
 add_executable(${target} ${vutu_ICON} ${app_sources})
+target_compile_definitions(${target} PRIVATE ML_INCLUDE_SDL=1)
 
 # find SDL headers and libraries
 if(APPLE)

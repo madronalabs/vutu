@@ -23,7 +23,7 @@ class SampleDisplay : public Widget
   bool _initialized{ false };
   bool sampleDirty_{ false };
 
-  std::unique_ptr< Layer > _backingLayer;
+  std::unique_ptr< DrawableImage > _backingLayer;
   const ml::Sample * _pSample{nullptr};
   ml::DrawContext _prevDC{nullptr};
   

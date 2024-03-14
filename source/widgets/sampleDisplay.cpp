@@ -27,7 +27,7 @@ void SampleDisplay::resize(ml::DrawContext dc)
   if((w != bw) || (h != bh))
   {
     std::cout << "SampleDisplay::resize: " << w << " x " << h << "\n";
-    _backingLayer = ml::make_unique< Layer >(nvg, w, h);
+    _backingLayer = std::make_unique< DrawableImage >(nvg, w, h);
     sampleDirty_ = true;
   }
 }
@@ -256,7 +256,7 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
   int h = _backingLayer->height;
   
   // begin rendering to backing layer
-  drawToLayer(_backingLayer.get());
+  drawToImage(_backingLayer.get());
   nvgBeginFrame(nvg, w, h, 1.0f);
   
   auto color = getColor(dc, "partials");
@@ -360,11 +360,9 @@ void SampleDisplay::draw(ml::DrawContext dc)
     auto timeToX = projections::linear({0, sampleDuration}, xRange);
     size_t sr = _pSample->sampleRate;
     Interval frameInterval = currentValue*sr;
-
-    auto nativeImage = getNativeImageHandle(*_backingLayer);
     
     // make an image pattern. The entire source image maps to the specified rect of the destination.
-    NVGpaint img = nvgImagePattern(nvg, margin*2, margin*2, w - margin*4, h - margin*4, 0, nativeImage, 1.0f);
+    NVGpaint img = nvgImagePattern(nvg, margin*2, margin*2, w - margin*4, h - margin*4, 0, _backingLayer->_buf->image, 1.0f);
     
     // draw image
     {

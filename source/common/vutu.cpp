@@ -71,10 +71,6 @@ int main(int argc, char *argv[])
   
   // make view
   VutuView appView(getAppName(), instanceNum);
-  
-  // set initial size.
-  appView.setSizeInGridUnits({32, 16});
-  appView.setGridSizeDefault(30);
  
   SDL_Window *window = initSDLWindow(appView, "vutu");
   if(window)

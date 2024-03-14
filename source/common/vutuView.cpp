@@ -36,6 +36,11 @@ VutuView::VutuView(TextFragment appName, size_t instanceNum) :
 {
   Actor::start();
   std::cout << "VutuView: " << appName << " " << instanceNum << "\n";
+
+  // set initial size and limits
+  setSizeInGridUnits({ 32, 16 });
+  setMinSizeInGridUnits({ 32, 16 });
+  setGridSizeDefault(48);
 }
 
 VutuView::~VutuView ()
@@ -160,14 +165,9 @@ void VutuView::initializeResources(NativeDrawContext* nvg)
   
   if (nvg)
   {
-    // fonts
-    int font1 = nvgCreateFontMem(nvg, "MLVG_sans", (unsigned char*)resources::D_DIN_otf, resources::D_DIN_otf_size, 0);
-    const unsigned char* pFont1 = reinterpret_cast<const unsigned char *>(&font1);
-    _resources["d_din"] = ml::make_unique< Resource >(pFont1, pFont1 + sizeof(int));
-
-    int font2 = nvgCreateFontMem(nvg, "MLVG_italic", (unsigned char *)resources::D_DIN_Italic_otf, resources::D_DIN_Italic_otf_size, 0);
-    const unsigned char* pFont2 = reinterpret_cast<const unsigned char *>(&font2);
-    _resources["d_din_oblique"] = ml::make_unique< Resource >(pFont2, pFont2 + sizeof(int));
+      // fonts
+      _resources.fonts["d_din"] = std::make_unique< FontResource >(nvg, "MLVG_sans", resources::D_DIN_otf, resources::D_DIN_otf_size);
+      _resources.fonts["d_din_oblique"] = std::make_unique< FontResource >(nvg, "MLVG_italic", resources::D_DIN_Italic_otf, resources::D_DIN_Italic_otf_size);
   }
 }
 
