@@ -356,7 +356,7 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
   {
     nvgBeginPath(nvg);
     nvgRect(nvg, marginBounds);
-    nvgFillColor(nvg, colors::blue);
+    nvgFillColor(nvg, colors::black);
     nvgFill(nvg);
   }
   
