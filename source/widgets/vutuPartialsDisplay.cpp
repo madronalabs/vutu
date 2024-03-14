@@ -69,7 +69,7 @@ MessageList VutuPartialsDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc
     int h = bounds.height();
     std::cout << "VutuPartialsDisplay::resize: " << w << " x " << h <<  "\n";
     
-    _backingLayer = ml::make_unique< Layer >(nvg, w, h);
+    _backingLayer = std::make_unique< DrawableImage >(nvg, w, h);
     
     paintPartials(dc);
     _partialsDirty = false;
@@ -116,8 +116,8 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
   const float maxBwSize = h/64.f;//gridSize/2.f;
   const float strokeWidth = 2.f;//gridSize/16.f;
   
-  // begin rendering to backing layer
-  drawToLayer(_backingLayer.get());
+  // begin rendering to backing image
+  drawToImage(_backingLayer.get());
   nvgBeginFrame(nvg, w, h, 1.0f);
   
   // draw opaque black bg
@@ -356,7 +356,7 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
   {
     nvgBeginPath(nvg);
     nvgRect(nvg, marginBounds);
-    nvgFillColor(nvg, bgColor);
+    nvgFillColor(nvg, colors::blue);
     nvgFill(nvg);
   }
   
@@ -371,16 +371,8 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
     
     int bw = _backingLayer->width;
     int bh = _backingLayer->height;
+    
 
-    // blit backing layer to main layer
-    auto nativeImage = getNativeImageHandle(*_backingLayer);
-    
-    // paint background color
-    nvgBeginPath(nvg);
-    nvgRect(nvg, 0, 0, w, h);
-    nvgFillColor(nvg, bgColor);
-    nvgFill(nvg);
-    
     auto freqRange = _pPartials->stats.freqRange;
     freqRange.mX1 -= kFreqMargin;
     freqRange.mX1 = max(freqRange.mX1, kFreqMargin);
@@ -394,18 +386,19 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
     
     // make an image pattern. The entire source image maps to the specified rect of the destination.
     //NVGpaint img = nvgImagePattern(nvg, margin, margin, w - margin*2, h - margin*2, 0, nativeImage, 1.0f);
-    // make an image pattern. The entire source image maps to the specified rect of the destination.
-    NVGpaint img = nvgImagePattern(nvg, margin*2, margin*2, w - margin*4, h - margin*4, 0, nativeImage, 1.0f);
+
+
+    NVGpaint img = nvgImagePattern(nvg, margin*2, margin*2, w - margin*4, h - margin*4, 0, _backingLayer->_buf->image, 1.0f);
 
     // paint image lighten over bg
-    nvgSave(nvg);
-    nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
+ //   nvgSave(nvg);
+//    nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
     nvgBeginPath(nvg);
 //    nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
     nvgRect(nvg, margin*2, margin*2, w - margin*4, h - margin*4);
     nvgFillPaint(nvg, img);
     nvgFill(nvg);
-    nvgRestore(nvg);
+//    nvgRestore(nvg);
     
     // draw max active time triangle
     if(_pPartials->stats.maxActiveTime > 0.f)

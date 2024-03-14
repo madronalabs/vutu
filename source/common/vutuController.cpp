@@ -190,6 +190,10 @@ int VutuController::loadSampleFromPath(Path samplePath)
     SF_INFO fileInfo{};
     sf_count_t framesRead{0};
     float* pData{nullptr};
+
+    auto fText = filePathText.getText();
+    std::cout << "file as text: " << filePathText.getText() << "\n";
+
     auto file = sf_open(filePathText.getText(), SFM_READ, &fileInfo);
     if(file)
     {
@@ -337,24 +341,17 @@ void VutuController::saveTextToPath(const TextFragment& text, Path savePath)
   if(!savePath) return;
   
   File saveFile (savePath);
-  
-  if(saveFile.hasWriteAccess())
+
+
+  if (saveFile.replaceWithText(text))
   {
-    if(saveFile.replaceWithText(text))
-    {
       std::cout << "saved text to " << savePath << "\n";
-    }
-    else
-    {
-      // TODO other save errors
-    }
   }
   else
   {
-    std::cout << "save to file: no write access!\n";
-    // TODO
+      // TODO other save errors
   }
-  
+
 }
 
 int VutuController::analyzeSample()
@@ -589,7 +586,7 @@ void VutuController::onMessage(Message m)
           File loadOriginDir(recentSamplesPath);
           if(!loadOriginDir)
           {
-            loadOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "");
+            loadOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "");
           }
           auto loadPath = FileDialog::getFilePathForLoad(loadOriginDir.getFullPath(), "WAV audio:wav;AIFF audio:aiff,aif,aifc");
           if(loadPath)
@@ -632,7 +629,7 @@ void VutuController::onMessage(Message m)
             File exportOriginDir(recentSamplesPath);
             if(!exportOriginDir)
             {
-              exportOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "");
+              exportOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "");
             }
             auto shortName = textUtils::stripExtension(sourceFileLoaded.getShortName());
             if(!shortName) shortName = "audio-export";
@@ -713,7 +710,7 @@ void VutuController::onMessage(Message m)
             File exportOriginDir(recentPartialsPath);
             if(!exportOriginDir)
             {
-              exportOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "partials");
+              exportOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "partials");
             }
             auto shortName = textUtils::stripExtension(sourceFileLoaded.getShortName());
             if(!shortName) shortName = "partials-export";
@@ -733,16 +730,12 @@ void VutuController::onMessage(Message m)
                 auto partialsJson = vutuPartialsToJSON(*pPartials);
                 auto partialsText = JSONToText(partialsJson);
                 File saveFile (savePath);
-                if(saveFile.hasWriteAccess())
-                {
-                  recentPartialsPath = savePath;
-                  saveTextToPath(partialsText, savePath);
-                }
-                else
-                {
-                  std::cout << "export partials: no write access!\n";
-                  // TODO error
-                }
+
+
+                recentPartialsPath = savePath;
+                saveTextToPath(partialsText, savePath);
+
+
               }
             }
           }
@@ -754,7 +747,7 @@ void VutuController::onMessage(Message m)
           File loadOriginDir(recentPartialsPath);
           if(!loadOriginDir)
           {
-            loadOriginDir = getApplicationDataRoot(getMakerName(), "Vutu", "partials");
+            loadOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "partials");
           }
           auto loadPath = FileDialog::getFilePathForLoad(loadOriginDir.getFullPath(), "Partials:utu");
           if(loadPath)
