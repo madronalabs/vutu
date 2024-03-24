@@ -226,8 +226,8 @@ if(APPLE)
          MACOSX_PACKAGE_LOCATION "Resources")
 endif()
 
+add_executable(${target} WIN32 ${vutu_ICON} ${app_sources})
 
-add_executable(${target} ${vutu_ICON} ${app_sources})
 target_compile_definitions(${target} PRIVATE ML_INCLUDE_SDL=1)
 
 # find SDL headers and libraries
@@ -235,15 +235,12 @@ if(APPLE)
     # to use the SDL2 framework in /Library/Frameworks, do this:
     find_package(SDL2 REQUIRED COMPONENTS SDL2)
 elseif(WIN32)
-    # it seems like there's no standard place to put the SDL dev tools on Windows.
-    # we put them in an SDL dir alongside the main project directory.
-    set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}/../SDL/include")
-    # Support both 32 and 64 bit builds
-    if (${CMAKE_SIZEOF_VOID_P} MATCHES 8)
-      set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/lib/x64")
-    else ()
-      set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/lib/x86")
-    endif ()
+        # it seems like there's no standard place to put the SDL dev tools on Windows.
+        # we put them in an SDL dir alongside the main project directory.
+        set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}/../SDL/include")
+
+        # Support 64 bit builds
+        set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/VisualC/x64/Release")
 endif()
 message("SDL2 headers should be in: " ${SDL2_INCLUDE_DIRS} )
 message("SDL2 libraries should be in: " ${SDL2_LIBRARIES_DIR} )
@@ -346,16 +343,19 @@ if(APPLE)
      target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")  
      
      # add SDL2 framework location to @runpath 
-set_target_properties( 
-     ${target} PROPERTIES
-     XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@loader_path/../Frameworks"
-     )
+     set_target_properties( ${target} PROPERTIES
+        XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@loader_path/../Frameworks")
+
 elseif(WIN32)
-    find_package(OpenGL REQUIRED)
-    target_link_libraries(${target} PRIVATE ${OPENGL_gl_LIBRARY})
+        find_package(OpenGL REQUIRED)
+        target_link_libraries(${target} PRIVATE ${OPENGL_gl_LIBRARY})
+        target_link_libraries(${target} PRIVATE "Shcore.lib")
+        target_link_libraries(${target} PRIVATE "winmm.lib")
+        target_link_libraries(${target} PRIVATE "setupapi.lib")
+        target_link_libraries(${target} PRIVATE "version.lib")
+        target_link_libraries(${target} PRIVATE "Imm32.lib")
+        target_link_libraries(${target} PRIVATE debug "msvcrtd.lib" optimized "msvcrt.lib")
 endif()
-
-
 
 # for Mac OS copy SDL2.framework into bundle and codesign it
 if(APPLE)
