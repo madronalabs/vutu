@@ -38,9 +38,9 @@ VutuView::VutuView(TextFragment appName, size_t instanceNum) :
   std::cout << "VutuView: " << appName << " " << instanceNum << "\n";
 
   // set initial size and limits
-  setSizeInGridUnits({ 32, 16 });
-  setMinSizeInGridUnits({ 32, 16 });
-  setGridSizeDefault(48);
+  setSizeInGridUnits(kDefaultGridUnits);
+  setMinSizeInGridUnits(kDefaultGridUnits);
+  setGridSizeDefault(kDefaultGridUnitSize);
 }
 
 VutuView::~VutuView ()

@@ -17,7 +17,7 @@
 #include "vutuPartials.h"
 
 #include "mlvg.h"
-#include "miniz.h"
+//#include "miniz.h"
 
 // Loris includes
 #include "loris.h"
@@ -149,7 +149,7 @@ void VutuController::broadcastSynthesizedSample()
 int VutuController::saveSampleToWavFile(const Sample& sample, Path wavPath)
 {
   int OK{ false };
-  std::cout << "file to save: " << wavPath << "\n";
+  std::cout << "saveSampleToWavFile: " << wavPath << "\n";
   
   SNDFILE* sndfile;
   SF_INFO* sf_info;
@@ -184,7 +184,6 @@ int VutuController::loadSampleFromPath(Path samplePath)
   File fileToLoad(samplePath);
   if(fileToLoad)
   {
-    std::cout << "file to load: " << samplePath << "\n";
     // load the file
     auto filePathText = fileToLoad.getFullPathAsText();
     SF_INFO fileInfo{};
@@ -194,9 +193,14 @@ int VutuController::loadSampleFromPath(Path samplePath)
     auto fText = filePathText.getText();
     std::cout << "file as text: " << filePathText.getText() << "\n";
 
-    auto file = sf_open(filePathText.getText(), SFM_READ, &fileInfo);
+    SNDFILE* file = sf_open(filePathText.getText(), SFM_READ, &fileInfo);
     if(file)
     {
+      //  auto p2 = file.getFullPath();
+      //  std::cout << "loadSampleFromPath: file fullPath: " << p2 << " (length " << p2.getSize() << ")\n";
+
+
+
       constexpr size_t kMaxSeconds = 60;
       size_t kMaxFrames = kMaxSeconds*fileInfo.samplerate;
       size_t framesToRead = std::min(size_t(fileInfo.frames), kMaxFrames);
@@ -583,15 +587,19 @@ void VutuController::onMessage(Message m)
         {
           // load from saved origin or default
           // TODO make a function
-          File loadOriginDir(recentSamplesPath);
+          Path loadOriginDir(recentSamplesInPath);
+
           if(!loadOriginDir)
           {
-            loadOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "");
+
+            loadOriginDir = FileUtils::getUserDataPath();
           }
-          auto loadPath = FileDialog::getFilePathForLoad(loadOriginDir.getFullPath(), "WAV audio:wav;AIFF audio:aiff,aif,aifc");
+
+          auto loadPath = FileDialog::getFilePathForLoad(loadOriginDir, "WAV audio:wav;AIFF audio:aiff,aif,aifc");
+
           if(loadPath)
           {
-            recentSamplesPath = loadPath;
+              recentSamplesInPath = loadPath;
             if(loadSampleFromPath(loadPath))
             {
               _clearPartialsData();
@@ -626,17 +634,17 @@ void VutuController::onMessage(Message m)
           // save synthesized audio to a file
           if(getSize(_synthesizedSample))
           {
-            File exportOriginDir(recentSamplesPath);
+            File exportOriginDir(recentSamplesOutPath);
             if(!exportOriginDir)
             {
-              exportOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "");
+              exportOriginDir = FileUtils::getUserDataPath();
             }
+
             auto shortName = textUtils::stripExtension(sourceFileLoaded.getShortName());
-            if(!shortName) shortName = "audio-export";
             auto savePath = FileDialog::getFilePathForSave(exportOriginDir.getFullPath(), TextFragment(shortName, ".wav"));
             if(savePath)
             {
-              recentSamplesPath = savePath;
+              recentSamplesOutPath = savePath;
               File saveFile (savePath);
               saveSampleToWavFile(_synthesizedSample, savePath);
             }
@@ -702,25 +710,24 @@ void VutuController::onMessage(Message m)
         }
         case(hash("export")):
         {
+          // export .vutu partials
           VutuPartialsData* pPartials = _vutuPartials.get();
           bool partialsOK = pPartials && (pPartials->partials.size() > 0);
           if(partialsOK)
           {
             
-            File exportOriginDir(recentPartialsPath);
+            Path exportOriginDir(recentPartialsOutPath);
             if(!exportOriginDir)
             {
-              exportOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "partials");
+              exportOriginDir = FileUtils::getApplicationDataPath(getMakerName(), "Vutu", "");
             }
             auto shortName = textUtils::stripExtension(sourceFileLoaded.getShortName());
             if(!shortName) shortName = "partials-export";
-            auto savePath = FileDialog::getFilePathForSave(exportOriginDir.getFullPath(), TextFragment(shortName, ".utu"));
+
+            auto savePath = FileDialog::getFilePathForSave(exportOriginDir, TextFragment(shortName, ".utu"));
             if(savePath)
             {
               auto ext = getExtensionFromPath(savePath);
-
-              std::cout << "saving to path: " << savePath << "\n";
-              std::cout << "extension: " << ext << "\n";
 
               if(ext == "utu")
               {
@@ -731,10 +738,8 @@ void VutuController::onMessage(Message m)
                 auto partialsText = JSONToText(partialsJson);
                 File saveFile (savePath);
 
-
-                recentPartialsPath = savePath;
+                recentPartialsOutPath = savePath;
                 saveTextToPath(partialsText, savePath);
-
 
               }
             }
@@ -744,15 +749,17 @@ void VutuController::onMessage(Message m)
         }
         case(hash("import")):
         {
-          File loadOriginDir(recentPartialsPath);
-          if(!loadOriginDir)
+          Path importOriginDir(recentPartialsInPath);
+          if (!importOriginDir)
           {
-            loadOriginDir = FileUtils::getApplicationDataRoot(getMakerName(), "Vutu", "partials");
+              importOriginDir = FileUtils::getApplicationDataPath(getMakerName(), "Vutu", "");
           }
-          auto loadPath = FileDialog::getFilePathForLoad(loadOriginDir.getFullPath(), "Partials:utu");
+
+          auto loadPath = FileDialog::getFilePathForLoad(importOriginDir, "Partials:utu");
+
           if(loadPath)
           {
-            recentPartialsPath = loadPath;
+              recentPartialsInPath = loadPath;
             // load Sumu partials from JSON
             if(loadPartialsFromPath(loadPath))
             {

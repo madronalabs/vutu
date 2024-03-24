@@ -390,15 +390,12 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
 
     NVGpaint img = nvgImagePattern(nvg, margin*2, margin*2, w - margin*4, h - margin*4, 0, _backingLayer->_buf->image, 1.0f);
 
-    // paint image lighten over bg
- //   nvgSave(nvg);
-//    nvgGlobalCompositeOperation(nvg, NVG_LIGHTER);
+
     nvgBeginPath(nvg);
-//    nvgRect(nvg, margin, margin, w - margin*2, h - margin*2);
     nvgRect(nvg, margin*2, margin*2, w - margin*4, h - margin*4);
     nvgFillPaint(nvg, img);
     nvgFill(nvg);
-//    nvgRestore(nvg);
+
     
     // draw max active time triangle
     if(_pPartials->stats.maxActiveTime > 0.f)

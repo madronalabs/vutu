@@ -77,9 +77,11 @@ private:
 
   // file paths
   // TODO persist in app prefs
-  Path recentSamplesPath;
-  Path recentPartialsPath;
-  
+  Path recentSamplesInPath;
+  Path recentSamplesOutPath;
+  Path recentPartialsInPath;
+  Path recentPartialsOutPath;
+
   File sourceFileLoaded;
   
   Timer _debugTimer;

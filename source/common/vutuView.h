@@ -13,6 +13,8 @@
 
 // constrain window if true
 constexpr bool kFixedRatioSize {false};
+const Vec2 kDefaultGridUnits{ 32, 16 };
+const int kDefaultGridUnitSize(36);
 
 const ml::Rect kDefaultPopupSize{0, 0, 3.5, 3.5};
 const ml::Rect kDefaultPopupStartRect{0, 0, 1, 1};
