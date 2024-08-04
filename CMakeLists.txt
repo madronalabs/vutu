@@ -9,7 +9,7 @@
 # Windows:
 # cmake -G"Visual Studio 14 2015 Win64" ..
 
-cmake_minimum_required (VERSION 3.16)
+cmake_minimum_required (VERSION 3.5)
 
 IF(APPLE)
   SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
@@ -55,8 +55,13 @@ if(APPLE)
   set (MADRONALIB_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/madronalib")
   set (MADRONALIB_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
 elseif(WIN32)
-  set (MADRONALIB_INCLUDE_DIR "C:/Program Files/madronalib/include")
-  set (MADRONALIB_LIBRARY_DIR "C:/Program Files/madronalib/lib")
+    if(EXISTS "C:/Program Files/madronalib/lib/madrona.lib")
+        set (MADRONALIB_INCLUDE_DIR "C:/Program Files/madronalib/include")
+        set (MADRONALIB_LIBRARY_DIR "C:/Program Files/madronalib/lib")
+    else()
+        set (MADRONALIB_INCLUDE_DIR "C:/Program Files (x86)/madronalib/include")
+        set (MADRONALIB_LIBRARY_DIR "C:/Program Files (x86)/madronalib/lib")
+    endif()
 else()
 endif()
 
@@ -65,8 +70,6 @@ set(madronalib_NAME madrona$<$<CONFIG:Debug>:-debug>)
 
 message("madronalib headers should be in: " ${MADRONALIB_INCLUDE_DIR} )
 message("madronalib library should be at: " ${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME} )
-
-message("cmake lib dir: " ${CMAKE_INSTALL_FULL_LIBDIR} )
 
 #--------------------------------------------------------------------
 # find loris library
@@ -193,8 +196,10 @@ target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
 
 set(target Vutu)
 
+# convert any small binary resources we need to .c files
 create_resources (source/resources build/resources/vutu)
- 
+
+# gather sources
 file(GLOB COMMON_SOURCES "${CMAKE_SOURCE_DIR}/source/common/*.cpp")
 file(GLOB COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/source/common/*.h")
 
@@ -204,6 +209,10 @@ file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
 list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} )
 list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} )
 
+if(APPLE)
+elseif(WIN32)
+    list(APPEND app_sources "${CMAKE_SOURCE_DIR}/source/windows/hidpi.manifest" )
+endif()
 
 # get icon file
 if(APPLE)
@@ -215,26 +224,23 @@ if(APPLE)
   set(vutu_ICON ${CMAKE_CURRENT_SOURCE_DIR}/source/mac/vutu.icns)
   set_source_files_properties(${vutu_ICON} PROPERTIES
          MACOSX_PACKAGE_LOCATION "Resources")
-  
 endif()
 
+add_executable(${target} WIN32 ${vutu_ICON} ${app_sources})
 
-add_executable(${target} ${vutu_ICON} ${app_sources})
+target_compile_definitions(${target} PRIVATE ML_INCLUDE_SDL=1)
 
 # find SDL headers and libraries
 if(APPLE)
     # to use the SDL2 framework in /Library/Frameworks, do this:
     find_package(SDL2 REQUIRED COMPONENTS SDL2)
 elseif(WIN32)
-    # it seems like there's no standard place to put the SDL dev tools on Windows.
-    # we put them in an SDL dir alongside the main project directory.
-    set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}/../SDL/include")
-    # Support both 32 and 64 bit builds
-    if (${CMAKE_SIZEOF_VOID_P} MATCHES 8)
-      set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/lib/x64")
-    else ()
-      set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/lib/x86")
-    endif ()
+        # it seems like there's no standard place to put the SDL dev tools on Windows.
+        # we put them in an SDL dir alongside the main project directory.
+        set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}/../SDL/include")
+
+        # Support 64 bit builds
+        set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/VisualC/x64/Release")
 endif()
 message("SDL2 headers should be in: " ${SDL2_INCLUDE_DIRS} )
 message("SDL2 libraries should be in: " ${SDL2_LIBRARIES_DIR} )
@@ -337,16 +343,19 @@ if(APPLE)
      target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")  
      
      # add SDL2 framework location to @runpath 
-set_target_properties( 
-     ${target} PROPERTIES
-     XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@loader_path/../Frameworks"
-     )
+     set_target_properties( ${target} PROPERTIES
+        XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@loader_path/../Frameworks")
+
 elseif(WIN32)
-    find_package(OpenGL REQUIRED)
-    target_link_libraries(${target} PRIVATE ${OPENGL_gl_LIBRARY})
+        find_package(OpenGL REQUIRED)
+        target_link_libraries(${target} PRIVATE ${OPENGL_gl_LIBRARY})
+        target_link_libraries(${target} PRIVATE "Shcore.lib")
+        target_link_libraries(${target} PRIVATE "winmm.lib")
+        target_link_libraries(${target} PRIVATE "setupapi.lib")
+        target_link_libraries(${target} PRIVATE "version.lib")
+        target_link_libraries(${target} PRIVATE "Imm32.lib")
+        target_link_libraries(${target} PRIVATE debug "msvcrtd.lib" optimized "msvcrt.lib")
 endif()
-
-
 
 # for Mac OS copy SDL2.framework into bundle and codesign it
 if(APPLE)

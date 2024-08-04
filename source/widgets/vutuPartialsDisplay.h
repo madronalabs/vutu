@@ -18,7 +18,7 @@ class VutuPartialsDisplay : public Widget
   bool _partialsDirty{ true };
 
   
-  std::unique_ptr< Layer > _backingLayer;
+  std::unique_ptr< DrawableImage > _backingLayer;
   
   const VutuPartialsData * _pPartials{nullptr};
   

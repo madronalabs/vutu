@@ -40,7 +40,7 @@ size_t getEndFrame(const ml::Sample& sample, Interval srcInterval)
 
 void readParameterDescriptions(ParameterDescriptionList& params)
 {
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
     { "range", { 8, 1024 } },
     { "plaindefault", 40 },
@@ -48,7 +48,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "window_width" },
     { "range", {16, 768} },
     { "plaindefault", 80 },
@@ -56,14 +56,14 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "amp_floor" },
     { "range", {-90, -20} },
     { "plaindefault", -60 },
     { "units", "dB" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "freq_drift" },
     { "range", {2, 80} },
     { "plaindefault", 40 },
@@ -71,7 +71,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "lo_cut" },
     { "range", {20, 2000} },
     { "plaindefault", 20 },
@@ -79,7 +79,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "hi_cut" },
     { "range", {200, 20000} },
     { "plaindefault", 20000 },
@@ -87,7 +87,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "noise_width" },
     { "range", {10, 5000} },
     { "plaindefault", 500 },
@@ -95,7 +95,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "fundamental" },
     { "range", {22, 2200} },
     { "plaindefault", 220 },
@@ -103,7 +103,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "Hz" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "test_volume" },
     { "range", {0, 0.5f} },
     { "log", false },
@@ -111,7 +111,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "output_volume" },
     { "range", {-60, 0} },
     { "log", false },
@@ -119,25 +119,25 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "units", "dB" }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "sample/start_time" },
     { "range", {0, 1} },
     { "default", 0.f }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "sample/end_time" },
     { "range", {0, 1} },
     { "default", 1.f }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "sample_duration" },
     { "range", {0, 1} },
     { "default", 1.f }
   } ) );
   
-  params.push_back( ml::make_unique< ParameterDescription >(WithValues{
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "analysis_interval" },
     { "default", Interval{0, 1} }
   } ) );
