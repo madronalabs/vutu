@@ -190,8 +190,6 @@ inline void calcStats(VutuPartialsData& p)
   p.stats.freqRange = getParamRangeInPartials(p, "freq");
   p.stats.nPartials = p.partials.size();
   
-  std::cout << "calcStats: " <<   p.stats.nPartials << " partials. \n";
-  std::cout << "    timeRange: " <<   p.stats.timeRange << "\n";
   // store min, max times for each partial
   p.stats.partialTimeRanges.clear();
   for(int i=0; i<p.stats.nPartials; ++i)
@@ -487,7 +485,7 @@ inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int 
   TextFragment partialIndexText ("p", textUtils::naturalNumberToText(partialIdx));
   Path dataPath(Symbol(partialIndexText), pname);
   Value dataBlob = tree[dataPath];
-  char* blobDataPtr = static_cast<char*>(dataBlob.getBlobValue());
+  char* blobDataPtr = static_cast<char*>(dataBlob.getBlobData());
   unsigned blobSize = dataBlob.getBlobSize();
   
   const float* pVectorData{reinterpret_cast<const float*>(blobDataPtr)};
@@ -521,7 +519,7 @@ inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& 
       partialsData->fundamental = tree["fundamental"].getFloatValue();
 
       partialsData->partials.resize(nPartials);
-      std::cout << "reading " << nPartials << " partials from binary\n";
+
       for(int i=0; i<nPartials; ++i)
       {
         partialsData->partials[i].time = getPartialDataFromTree(tree, i, "time");
