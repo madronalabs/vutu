@@ -15,6 +15,7 @@
 namespace ml
 {
 
+
 static constexpr float kVutuPartialsFileVersion{ 1.0 };
 static constexpr char kVutuPartialsFileType[] = "VutuPartials";
 static constexpr char kVutuPartials2FileType[] = "VutuPartials2";
@@ -34,7 +35,8 @@ struct PartialsStats
   std::vector< Interval > partialTimeRanges; // time range for each partial
 };
 
-// a single partial is a trajectory of these five values over time.
+// a single partial is a trajectory of amp, frequency, bandwidth and phase over time.
+// the time vector at index i contains the times for the value changes in all the other vectors at index i.
 struct VutuPartial
 {
   std::vector< float > time;
@@ -72,7 +74,6 @@ struct PartialFrame
   float bandwidth{0};
   float phase{0};
 };
-
 
 Interval getParamRangeInPartials(const VutuPartialsData& partialData, Symbol param);
 
@@ -248,8 +249,6 @@ inline void calcStats(VutuPartialsData& p)
   
   p.stats.maxActivePartials = maxActive;
   p.stats.maxActiveTime = maxActiveTime;
-  
-  std::cout << "max active partials: " << p.stats.maxActivePartials <<  " at time: " << p.stats.maxActiveTime << "\n";
 }
 
 // get an interpolated frame of data from the partial index p of the VutuPartialsData at time t.
@@ -379,55 +378,7 @@ inline PartialFrame getPartialFrameByIndex(const VutuPartialsData& partialData, 
   return f;
 }
 
-
-// return a JSON object representing the partials. The caller is responsible for freeing the object.
-//
-inline JSONHolder vutuPartialsToJSON(const VutuPartialsData& partialsData)
-{
-  JSONHolder root;
-  
-  cJSON_AddNumberToObject(root.data(), "version", kVutuPartialsFileVersion);
-  cJSON_AddStringToObject(root.data(), "type", kVutuPartialsFileType);
-  cJSON_AddStringToObject(root.data(), "source", partialsData.sourceFile.getText());
-  
-  // add analysis parameters
-  cJSON_AddNumberToObject(root.data(), "resolution", partialsData.resolution);
-  cJSON_AddNumberToObject(root.data(), "window_width", partialsData.windowWidth);
-  cJSON_AddNumberToObject(root.data(), "amp_floor", partialsData.ampFloor);
-  cJSON_AddNumberToObject(root.data(), "freq_drift", partialsData.freqDrift);
-  cJSON_AddNumberToObject(root.data(), "lo_cut", partialsData.loCut);
-  cJSON_AddNumberToObject(root.data(), "hi_cut", partialsData.hiCut);
-  cJSON_AddNumberToObject(root.data(), "fundamental", partialsData.fundamental);
-
-  const size_t nPartials = partialsData.partials.size();
-  
-  std::cout << "exporting " << nPartials << " partials \n";
-  
-  for(int i=0; i<nPartials; ++i)
-  {
-    // TODO make const-aware version of cJSON?
-    VutuPartial& sp = const_cast<VutuPartial&>(partialsData.partials[i]);
-    
-    size_t partialLength = sp.time.size();
-    // todo check partial arrays match in size
-    
-    TextFragment partialIndexText ("p", textUtils::naturalNumberToText(i));
-    
-    auto pNewJSONPartial = cJSON_CreateObject();
-    cJSON_AddItemToObject(pNewJSONPartial, "time", cJSON_CreateFloatArray(sp.time.data(), partialLength));
-    cJSON_AddItemToObject(pNewJSONPartial, "amp", cJSON_CreateFloatArray(sp.amp.data(), partialLength));
-    cJSON_AddItemToObject(pNewJSONPartial, "freq", cJSON_CreateFloatArray(sp.freq.data(), partialLength));
-    cJSON_AddItemToObject(pNewJSONPartial, "bw", cJSON_CreateFloatArray(sp.bandwidth.data(), partialLength));
-    cJSON_AddItemToObject(pNewJSONPartial, "phase", cJSON_CreateFloatArray(sp.phase.data(), partialLength));
-    cJSON_AddItemToObject(root.data(), partialIndexText.getText(), pNewJSONPartial);
-  }
-  return root;
-}
-
-
-// return a binary blob representing the partials. The caller is responsible for freeing the object.
-//
-inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partialsData)
+inline Tree< Value > vutuPartialsToValueTree(const VutuPartialsData& partialsData)
 {
   Tree<Value> tree;
   tree["version"] = kVutuPartialsFileVersion;
@@ -440,13 +391,10 @@ inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partial
   tree["lo_cut"] = partialsData.loCut;
   tree["hi_cut"] = partialsData.hiCut;
   tree["fundamental"] = partialsData.fundamental;
-
+  
   const size_t nPartials = partialsData.partials.size();
   tree["n_partials"] = (unsigned long)nPartials;
 
-  std::cout << "exporting " << nPartials << " partials as binary\n";
-
-  
   for(int i=0; i<nPartials; ++i)
   {
     VutuPartial& sp = const_cast<VutuPartial&>(partialsData.partials[i]);
@@ -476,14 +424,30 @@ inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partial
     Path phasePath(Symbol(partialIndexText), "phase");
     tree[phasePath] = phaseBlob;
   }
+  
+  return tree;
+}
 
-  return valueTreeToBinary(tree);
+// return a JSON object representing the partials. The caller is responsible for freeing the object.
+//
+inline JSONHolder vutuPartialsToJSON(const VutuPartialsData& partialsData)
+{
+  return valueTreeToJSON(vutuPartialsToValueTree(partialsData));
+}
+
+
+// return a binary blob representing the partials. The caller is responsible for freeing the object.
+//
+inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partialsData)
+{
+  return valueTreeToBinary(vutuPartialsToValueTree(partialsData));
 }
 
 inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int partialIdx, Path pname)
 {
   TextFragment partialIndexText ("p", textUtils::naturalNumberToText(partialIdx));
   Path dataPath(Symbol(partialIndexText), pname);
+  
   Value dataBlob = tree[dataPath];
   char* blobDataPtr = static_cast<char*>(dataBlob.getBlobData());
   unsigned blobSize = dataBlob.getBlobSize();
@@ -495,15 +459,39 @@ inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int 
 
 // parse the binary data and return a new VutuPartialsData object.
 //
-inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& binaryData)
+inline VutuPartialsData* valueTreeToVutuPartials(const Tree<Value>& tree)
 {
+  constexpr size_t kMaxPartials{2 << 24};
   VutuPartialsData* partialsData = new VutuPartialsData;
-  const uint8_t* pData{binaryData.data()};
-
-  Tree<Value> tree = binaryToValueTree(binaryData);
+  
+  size_t nPartials{0};
   if(tree.getNode("n_partials"))
   {
     size_t nPartials = tree["n_partials"].getUnsignedLongValue();
+  }
+  else
+  {
+    while(1)
+    {
+      TextFragment partialIndexText ("p", textUtils::naturalNumberToText(nPartials));
+      
+      Path partialExistsPath(partialIndexText, "time");
+      
+      if(tree.getConstNode(partialExistsPath))
+      {
+        nPartials++;
+      }
+      else
+      {
+        break;
+      }
+      if(nPartials > kMaxPartials) break;
+    }
+  }
+
+  if(partialsData)
+  {
+
     size_t res = tree["resolution"].getFloatValue();
     
     if(nPartials > 0)
@@ -517,9 +505,9 @@ inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& 
       partialsData->loCut = tree["lo_cut"].getFloatValue();
       partialsData->hiCut = tree["hi_cut"].getFloatValue();
       partialsData->fundamental = tree["fundamental"].getFloatValue();
-
+      
       partialsData->partials.resize(nPartials);
-
+      
       for(int i=0; i<nPartials; ++i)
       {
         partialsData->partials[i].time = getPartialDataFromTree(tree, i, "time");
@@ -529,151 +517,28 @@ inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& 
         partialsData->partials[i].phase = getPartialDataFromTree(tree, i, "phase");
       }
     }
+    calcStats(*partialsData);
   }
+  
 
-  calcStats(*partialsData);
   return partialsData;
+}
+
+// parse the binary data and return a new VutuPartialsData object.
+//
+inline VutuPartialsData* binaryToVutuPartials(const std::vector<unsigned char>& binaryData)
+{
+  const uint8_t* pData{binaryData.data()};
+  Tree<Value> tree = binaryToValueTree(binaryData);
+  return valueTreeToVutuPartials(tree);
 }
 
 // parse the JSON and return a new VutuPartialsData object.
 //
-inline VutuPartialsData* jsonToVutuPartials(JSONHolder& jsonData)
+inline VutuPartialsData* jsonToVutuPartials(const JSONHolder& jsonData)
 {
-  VutuPartialsData* pVutuPartials = new VutuPartialsData;
-  
-  cJSON* rootObj = jsonData.data();
-  assert(rootObj->type == cJSON_Object);
-  
-  cJSON* obj = rootObj->child;
-  while (obj)
-  {
-    TextFragment objStr(obj->string);
-    switch(obj->type)
-    {
-      case cJSON_Number:
-      {
-        auto stringHash = hash(objStr);
-        switch(stringHash)
-        {
-          case(hash("version")):
-            pVutuPartials->version = obj->valueint;
-            break;
-          case(hash("source_duration")):
-            pVutuPartials->sourceDuration = obj->valuedouble;
-            break;
-          case(hash("resolution")):
-            pVutuPartials->resolution = obj->valuedouble;
-            break;
-          case(hash("window_width")):
-            pVutuPartials->windowWidth = obj->valuedouble;
-            break;
-          case(hash("amp_floor")):
-            pVutuPartials->ampFloor = obj->valuedouble;
-            break;
-          case(hash("freq_drift")):
-            pVutuPartials->freqDrift = obj->valuedouble;
-            break;
-          case(hash("lo_cut")):
-            pVutuPartials->loCut = obj->valuedouble;
-            break;
-          case(hash("hi_cut")):
-            pVutuPartials->hiCut = obj->valuedouble;
-            break;
-          case(hash("fundamental")):
-            pVutuPartials->fundamental = obj->valuedouble;
-            break;
-        }
-        
-        // TEMP
-        std::cout << " loaded JSON " << objStr << " : " << obj->valuedouble << "\n";
-
-        break;
-      }
-      case cJSON_String:
-      {
-        auto stringHash = hash(objStr);
-        switch(stringHash)
-        {
-          case(hash("type")):
-            pVutuPartials->type = Symbol(obj->valuestring);
-            break;
-          case(hash("source")):
-            pVutuPartials->sourceFile = TextFragment(obj->valuestring);
-            break;
-        }
-        break;
-      }
-      case cJSON_Object:
-      {
-        if(objStr.beginsWith("p")) // get partial
-        {
-          //std::cout << "partial:" << pStr << "\n";
-          
-          pVutuPartials->partials.emplace_back(VutuPartial());
-          VutuPartial* pNewPartial = &pVutuPartials->partials.back();
-          
-          cJSON* jsonArrays = obj->child;
-          
-          auto pushAllArrayItems = [&](std::vector< float >& destVec){
-            for(cJSON* arrayItem = jsonArrays->child; arrayItem; arrayItem = arrayItem->next)
-            {
-              destVec.push_back(float(arrayItem->valuedouble));
-            };
-          };
-          
-          // parse arrays within partial. Arrays can appear in any order.
-          int nArrays{0};
-          while(jsonArrays)
-          {
-            assert(jsonArrays->type == cJSON_Array);
-            Symbol dataType(jsonArrays->string);
-            switch(hash(dataType))
-            {
-              case(hash("time")):
-              {
-                pushAllArrayItems(pNewPartial->time);
-                break;
-              }
-              case(hash("amp")):
-              {
-                pushAllArrayItems(pNewPartial->amp);
-                break;
-              }
-              case(hash("freq")):
-              {
-                pushAllArrayItems(pNewPartial->freq);
-                break;
-              }
-              case(hash("bw")):
-              {
-                pushAllArrayItems(pNewPartial->bandwidth);
-                break;
-              }
-              case(hash("phase")):
-              {
-                pushAllArrayItems(pNewPartial->phase);
-                break;
-              }
-              default:
-              {
-                // TODO
-                std::cout << "warning: unknown data in partial!\n";
-                break;
-              }
-            }
-            
-            jsonArrays = jsonArrays->next;
-            nArrays++;
-            
-          }
-        }
-        break;
-      }
-    }
-    obj = obj->next;
-  }
-  calcStats(*pVutuPartials);
-  return pVutuPartials;
+  auto vt = JSONToValueTree(jsonData);
+  return valueTreeToVutuPartials(vt);
 }
 
 
@@ -693,8 +558,13 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
     TextFragment partialsText;
     if(fileToLoad.loadAsText(partialsText))
     {
-      auto partialsJSON = textToJSON(partialsText);
-      newPartials = jsonToVutuPartials(partialsJSON);
+      
+      auto json = textToJSON(partialsText);
+      
+      // TEMP
+      theSymbolTable().audit();
+      
+      newPartials = jsonToVutuPartials(json);
     }
   }
   if(extension == "ut2")
@@ -707,15 +577,15 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
   }
   
   // if we didn't save a source duration, fake one from partials data
-  if(newPartials->sourceDuration == 0.0f)
+  if(newPartials)
   {
-    std::cout << "No duration found! using partials range " << newPartials->stats.timeRange << "\n";
-    newPartials->sourceDuration = newPartials->stats.timeRange.mX2;
+    if(newPartials->sourceDuration == 0.0f)
+    {
+      std::cout << "No duration found! using partials range " << newPartials->stats.timeRange << "\n";
+      newPartials->sourceDuration = newPartials->stats.timeRange.mX2;
+    }
   }
-  
   return newPartials;
 }
-
-
 
 }
