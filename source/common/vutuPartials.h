@@ -477,7 +477,7 @@ inline VutuPartialsData* valueTreeToVutuPartials(const Tree<Value>& tree)
       
       Path partialExistsPath(partialIndexText, "time");
       
-      if(tree.getConstNode(partialExistsPath))
+      if(tree.getNode(partialExistsPath))
       {
         nPartials++;
       }
@@ -540,7 +540,6 @@ inline VutuPartialsData* jsonToVutuPartials(const JSONHolder& jsonData)
   auto vt = JSONToValueTree(jsonData);
   return valueTreeToVutuPartials(vt);
 }
-
 
 // load Vutu partials from the file. If successful, creates a new VutuPartialsData object that the caller must own.
 //
