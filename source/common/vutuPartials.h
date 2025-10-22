@@ -8,7 +8,9 @@
 
 #include "madronalib.h"
 
+//#include "MZFiles.h"
 #include "MLFiles.h"
+// TEMP
 
 // stats about partials
 
@@ -393,8 +395,8 @@ inline Tree< Value > vutuPartialsToValueTree(const VutuPartialsData& partialsDat
   tree["fundamental"] = partialsData.fundamental;
   
   const size_t nPartials = partialsData.partials.size();
-  tree["n_partials"] = (unsigned long)nPartials;
-
+  tree["n_partials"] = (int)nPartials;
+  
   for(int i=0; i<nPartials; ++i)
   {
     VutuPartial& sp = const_cast<VutuPartial&>(partialsData.partials[i]);
@@ -402,31 +404,26 @@ inline Tree< Value > vutuPartialsToValueTree(const VutuPartialsData& partialsDat
     size_t partialLength = sp.time.size();
     
     TextFragment partialIndexText ("p", textUtils::naturalNumberToText(i));
-    size_t arrayBytes = partialLength*sizeof(float);
-    
-    Value timeBlob(sp.time.data(), arrayBytes);
     Path timePath(Symbol(partialIndexText), "time");
-    tree[timePath] = timeBlob;
+    tree[timePath] = Value(sp.time);
     
-    Value ampBlob(sp.amp.data(), arrayBytes);
     Path ampPath(Symbol(partialIndexText), "amp");
-    tree[ampPath] = ampBlob;
+    tree[ampPath] = Value(sp.amp);
     
-    Value freqBlob(sp.freq.data(), arrayBytes);
     Path freqPath(Symbol(partialIndexText), "freq");
-    tree[freqPath] = freqBlob;
+    tree[freqPath] = Value(sp.freq);
     
-    Value bwBlob(sp.bandwidth.data(), arrayBytes);
     Path bwPath(Symbol(partialIndexText), "bw");
-    tree[bwPath] = bwBlob;
+    tree[bwPath] = Value(sp.bandwidth);
     
-    Value phaseBlob(sp.phase.data(), arrayBytes);
     Path phasePath(Symbol(partialIndexText), "phase");
-    tree[phasePath] = phaseBlob;
+    tree[phasePath] = Value(sp.phase);
   }
   
   return tree;
 }
+
+
 
 // return a JSON object representing the partials. The caller is responsible for freeing the object.
 //
@@ -449,8 +446,8 @@ inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int 
   Path dataPath(Symbol(partialIndexText), pname);
   
   Value dataBlob = tree[dataPath];
-  char* blobDataPtr = static_cast<char*>(dataBlob.getBlobData());
-  unsigned blobSize = dataBlob.getBlobSize();
+  auto* blobDataPtr = dataBlob.data();
+  unsigned blobSize = dataBlob.size();
   
   const float* pVectorData{reinterpret_cast<const float*>(blobDataPtr)};
   unsigned sizeInFloats = blobSize/sizeof(float);
@@ -467,7 +464,7 @@ inline VutuPartialsData* valueTreeToVutuPartials(const Tree<Value>& tree)
   size_t nPartials{0};
   if(tree.getNode("n_partials"))
   {
-    size_t nPartials = tree["n_partials"].getUnsignedLongValue();
+    int nPartials = tree["n_partials"].getIntValue();
   }
   else
   {
