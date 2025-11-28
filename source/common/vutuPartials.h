@@ -8,9 +8,9 @@
 
 #include "madronalib.h"
 
-//#include "MZFiles.h"
-#include "MLFiles.h"
-// TEMP
+#include "MZFiles.h"
+
+#include <assert.h>
 
 // stats about partials
 
@@ -139,13 +139,13 @@ inline Interval getParamRangeInPartials(const VutuPartialsData& partialData, Sym
       default:
         break;
     }
-    if(paramRange.mX1 < r.mX1)
+    if(paramRange.x1 < r.x1)
     {
-      r.mX1 = paramRange.mX1;
+      r.x1 = paramRange.x1;
     }
-    if(paramRange.mX2 > r.mX2)
+    if(paramRange.x2 > r.x2)
     {
-      r.mX2 = paramRange.mX2;
+      r.x2 = paramRange.x2;
     }
   }
   return r;
@@ -176,9 +176,9 @@ inline void cleanOutliers(VutuPartialsData& p)
     return p.time.size() <= 1;
   };
   
-  before = p.partials.size();
+  before = sizeToInt(p.partials.size());
   p.partials.erase(std::remove_if(p.partials.begin(), p.partials.end(), discardPartial), p.partials.end());
-  after = p.partials.size();
+  after = sizeToInt(p.partials.size());
   std::cout << "cleanOutliers: before: " << before << ", after: " << after << "\n";
 }
 
@@ -217,8 +217,8 @@ inline void calcStats(VutuPartialsData& p)
   std::vector< std::pair< float, bool > > startAndEndTimes;
   for(const auto& startAndEnd : p.stats.partialTimeRanges)
   {
-    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.mX1, 0});
-    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.mX2, 1});
+    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.x1, 0});
+    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.x2, 1});
   }
   // sort them
   std::sort(startAndEndTimes.begin(), startAndEndTimes.end(), [](std::pair< float, bool > a, std::pair< float, bool > b){
@@ -404,21 +404,22 @@ inline Tree< Value > vutuPartialsToValueTree(const VutuPartialsData& partialsDat
     size_t partialLength = sp.time.size();
     
     TextFragment partialIndexText ("p", textUtils::naturalNumberToText(i));
-    Path timePath(Symbol(partialIndexText), "time");
+    Path timePath(partialIndexText, "time");
     tree[timePath] = Value(sp.time);
     
-    Path ampPath(Symbol(partialIndexText), "amp");
+    Path ampPath(partialIndexText, "amp");
     tree[ampPath] = Value(sp.amp);
     
-    Path freqPath(Symbol(partialIndexText), "freq");
+    Path freqPath(partialIndexText, "freq");
     tree[freqPath] = Value(sp.freq);
     
-    Path bwPath(Symbol(partialIndexText), "bw");
+    Path bwPath(partialIndexText, "bw");
     tree[bwPath] = Value(sp.bandwidth);
     
-    Path phasePath(Symbol(partialIndexText), "phase");
+    Path phasePath(partialIndexText, "phase");
     tree[phasePath] = Value(sp.phase);
   }
+
   
   return tree;
 }
@@ -443,7 +444,7 @@ inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partial
 inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int partialIdx, Path pname)
 {
   TextFragment partialIndexText ("p", textUtils::naturalNumberToText(partialIdx));
-  Path dataPath(Symbol(partialIndexText), pname);
+  Path dataPath(partialIndexText, pname);
   
   Value dataBlob = tree[dataPath];
   auto* blobDataPtr = dataBlob.data();
@@ -546,20 +547,15 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
   
   // TODO verify successful load
   
-  Path filePath = fileToLoad.getFullPath();
-  Symbol extension = getExtensionFromPath(filePath);
+  TextPath filePath = fileToLoad.getFullPath();
+  TextFragment extension = FileUtils::getExtensionFromPath(filePath);
   
   if(extension == "utu")
   {
     TextFragment partialsText;
     if(fileToLoad.loadAsText(partialsText))
     {
-      
       auto json = textToJSON(partialsText);
-      
-      // TEMP
-      theSymbolTable().audit();
-      
       newPartials = jsonToVutuPartials(json);
     }
   }
@@ -578,7 +574,7 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
     if(newPartials->sourceDuration == 0.0f)
     {
       std::cout << "No duration found! using partials range " << newPartials->stats.timeRange << "\n";
-      newPartials->sourceDuration = newPartials->stats.timeRange.mX2;
+      newPartials->sourceDuration = newPartials->stats.timeRange.x2;
     }
   }
   return newPartials;
