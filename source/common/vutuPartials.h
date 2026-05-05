@@ -8,7 +8,7 @@
 
 #include "madronalib.h"
 
-#include "MLFiles.h"
+#include "MZFiles.h"
 
 // stats about partials
 
@@ -137,13 +137,13 @@ inline Interval getParamRangeInPartials(const VutuPartialsData& partialData, Sym
       default:
         break;
     }
-    if(paramRange.mX1 < r.mX1)
+    if(paramRange.x1 < r.x1)
     {
-      r.mX1 = paramRange.mX1;
+      r.x1 = paramRange.x1;
     }
-    if(paramRange.mX2 > r.mX2)
+    if(paramRange.x2 > r.x2)
     {
-      r.mX2 = paramRange.mX2;
+      r.x2 = paramRange.x2;
     }
   }
   return r;
@@ -215,8 +215,8 @@ inline void calcStats(VutuPartialsData& p)
   std::vector< std::pair< float, bool > > startAndEndTimes;
   for(const auto& startAndEnd : p.stats.partialTimeRanges)
   {
-    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.mX1, 0});
-    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.mX2, 1});
+    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.x1, 0});
+    startAndEndTimes.push_back(std::pair< float, bool >{startAndEnd.x2, 1});
   }
   // sort them
   std::sort(startAndEndTimes.begin(), startAndEndTimes.end(), [](std::pair< float, bool > a, std::pair< float, bool > b){
@@ -393,35 +393,35 @@ inline Tree< Value > vutuPartialsToValueTree(const VutuPartialsData& partialsDat
   tree["fundamental"] = partialsData.fundamental;
   
   const size_t nPartials = partialsData.partials.size();
-  tree["n_partials"] = (unsigned long)nPartials;
+  tree["n_partials"] = static_cast<int>(nPartials);
 
   for(int i=0; i<nPartials; ++i)
   {
     VutuPartial& sp = const_cast<VutuPartial&>(partialsData.partials[i]);
-    
+
     size_t partialLength = sp.time.size();
-    
+
     TextFragment partialIndexText ("p", textUtils::naturalNumberToText(i));
     size_t arrayBytes = partialLength*sizeof(float);
-    
-    Value timeBlob(sp.time.data(), arrayBytes);
-    Path timePath(Symbol(partialIndexText), "time");
+
+    Value timeBlob(reinterpret_cast<const uint8_t*>(sp.time.data()), arrayBytes);
+    Path timePath(partialIndexText, "time");
     tree[timePath] = timeBlob;
-    
-    Value ampBlob(sp.amp.data(), arrayBytes);
-    Path ampPath(Symbol(partialIndexText), "amp");
+
+    Value ampBlob(reinterpret_cast<const uint8_t*>(sp.amp.data()), arrayBytes);
+    Path ampPath(partialIndexText, "amp");
     tree[ampPath] = ampBlob;
-    
-    Value freqBlob(sp.freq.data(), arrayBytes);
-    Path freqPath(Symbol(partialIndexText), "freq");
+
+    Value freqBlob(reinterpret_cast<const uint8_t*>(sp.freq.data()), arrayBytes);
+    Path freqPath(partialIndexText, "freq");
     tree[freqPath] = freqBlob;
-    
-    Value bwBlob(sp.bandwidth.data(), arrayBytes);
-    Path bwPath(Symbol(partialIndexText), "bw");
+
+    Value bwBlob(reinterpret_cast<const uint8_t*>(sp.bandwidth.data()), arrayBytes);
+    Path bwPath(partialIndexText, "bw");
     tree[bwPath] = bwBlob;
-    
-    Value phaseBlob(sp.phase.data(), arrayBytes);
-    Path phasePath(Symbol(partialIndexText), "phase");
+
+    Value phaseBlob(reinterpret_cast<const uint8_t*>(sp.phase.data()), arrayBytes);
+    Path phasePath(partialIndexText, "phase");
     tree[phasePath] = phaseBlob;
   }
   
@@ -446,12 +446,12 @@ inline std::vector<uint8_t> vutuPartialsToBinary(const VutuPartialsData& partial
 inline std::vector< float > getPartialDataFromTree(const Tree<Value>& tree, int partialIdx, Path pname)
 {
   TextFragment partialIndexText ("p", textUtils::naturalNumberToText(partialIdx));
-  Path dataPath(Symbol(partialIndexText), pname);
+  Path dataPath(partialIndexText, pname);
   
   Value dataBlob = tree[dataPath];
-  char* blobDataPtr = static_cast<char*>(dataBlob.getBlobData());
-  unsigned blobSize = dataBlob.getBlobSize();
-  
+  const uint8_t* blobDataPtr = dataBlob.data();
+  unsigned blobSize = dataBlob.size();
+
   const float* pVectorData{reinterpret_cast<const float*>(blobDataPtr)};
   unsigned sizeInFloats = blobSize/sizeof(float);
   return std::vector<float>(pVectorData, pVectorData + sizeInFloats);
@@ -467,7 +467,7 @@ inline VutuPartialsData* valueTreeToVutuPartials(const Tree<Value>& tree)
   size_t nPartials{0};
   if(tree.getNode("n_partials"))
   {
-    size_t nPartials = tree["n_partials"].getUnsignedLongValue();
+    size_t nPartials = static_cast<size_t>(tree["n_partials"].getIntValue());
   }
   else
   {
@@ -549,20 +549,17 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
   
   // TODO verify successful load
   
-  Path filePath = fileToLoad.getFullPath();
-  Symbol extension = getExtensionFromPath(filePath);
-  
+  TextPath filePath = fileToLoad.getFullPath();
+  Symbol extension(ml::FileUtils::getExtensionFromPath(filePath));
+
   if(extension == "utu")
   {
     TextFragment partialsText;
     if(fileToLoad.loadAsText(partialsText))
     {
-      
+
       auto json = textToJSON(partialsText);
-      
-      // TEMP
-      theSymbolTable().audit();
-      
+
       newPartials = jsonToVutuPartials(json);
     }
   }
@@ -581,7 +578,7 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
     if(newPartials->sourceDuration == 0.0f)
     {
       std::cout << "No duration found! using partials range " << newPartials->stats.timeRange << "\n";
-      newPartials->sourceDuration = newPartials->stats.timeRange.mX2;
+      newPartials->sourceDuration = newPartials->stats.timeRange.x2;
     }
   }
   return newPartials;

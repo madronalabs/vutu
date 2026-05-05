@@ -11,6 +11,10 @@
 
 cmake_minimum_required (VERSION 3.5)
 
+# CMake 4 dropped policy compatibility for projects requiring < 3.5;
+# libsndfile (vendored under source/external) still requests an older minimum.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
+
 IF(APPLE)
   SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
   set(CMAKE_OSX_DEPLOYMENT_TARGET "10.14" CACHE STRING "Minimum OS X deployment version")
@@ -28,6 +32,11 @@ project(Vutu)
  if(APPLE)
    # For now, explicitly disable C++17 alignment feature
    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-aligned-new")
+   # Loris 1.8 still uses std::auto_ptr / std::unary_function / std::bind2nd
+   # which were removed in C++17. Re-enable them via libc++ feature flags.
+   add_definitions(-D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR=1
+                   -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1
+                   -D_LIBCPP_ENABLE_CXX17_REMOVED_BINDERS=1)
  elseif(WIN32)
    # no unknown pragma warning
    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4068")
@@ -47,70 +56,31 @@ endif()
 
 
 #--------------------------------------------------------------------
-# find madronalib
+# find madronalib + manzanita (GUI library, formerly mlvg)
 #--------------------------------------------------------------------
 
-if(APPLE)
-  include(GNUInstallDirs)
-  set (MADRONALIB_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/madronalib")
-  set (MADRONALIB_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
-elseif(WIN32)
-    if(EXISTS "C:/Program Files/madronalib/lib/madrona.lib")
-        set (MADRONALIB_INCLUDE_DIR "C:/Program Files/madronalib/include")
-        set (MADRONALIB_LIBRARY_DIR "C:/Program Files/madronalib/lib")
-    else()
-        set (MADRONALIB_INCLUDE_DIR "C:/Program Files (x86)/madronalib/include")
-        set (MADRONALIB_LIBRARY_DIR "C:/Program Files (x86)/madronalib/lib")
-    endif()
-else()
-endif()
-
-# add -debug suffix to link debug madronalib for debug builds
-set(madronalib_NAME madrona$<$<CONFIG:Debug>:-debug>)
-
-message("madronalib headers should be in: " ${MADRONALIB_INCLUDE_DIR} )
-message("madronalib library should be at: " ${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME} )
+find_package(madronalib REQUIRED)
+find_package(manzanita REQUIRED)
 
 #--------------------------------------------------------------------
 # find loris library
 #--------------------------------------------------------------------
 
 if(APPLE)
-    set (LORIS_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/loris")
-    set (LORIS_CPP_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
+    include(GNUInstallDirs)
+    set (LORIS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
     set (LORIS_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
 elseif(WIN32)
-    set (LORIS_INCLUDE_DIR "C:/Program Files/loris/include")
-    set (LORIS_CPP_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
+    set (LORIS_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
     set (LORIS_LIBRARY_DIR "C:/Program Files/loris/lib")
 else()
 endif()
 
-# add -debug suffix to link debug loris for debug builds
-set(loris_NAME loris$<$<CONFIG:Debug>:-debug>)
+# loris (autotools) only ships a single libloris.a regardless of build type.
+set(loris_NAME loris)
 
 message("loris headers should be in: " ${LORIS_INCLUDE_DIR} )
 message("loris library should be at: " ${LORIS_LIBRARY_DIR}/${loris_NAME} )
-
-#--------------------------------------------------------------------
-# find mlvg library
-#--------------------------------------------------------------------
-
-if(APPLE)
-   include(GNUInstallDirs)
-   set (MLVG_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/mlvg")
-   set (MLVG_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
-elseif(WIN32)
-   set (MLVG_INCLUDE_DIR "C:/Program Files/mlvg/include")
-   set (MLVG_LIBRARY_DIR "C:/Program Files/mlvg/lib")
-else()
-endif()
-
-# add -debug suffix to link debug library for debug builds
-set(mlvg_NAME mlvg$<$<CONFIG:Debug>:-debug>)
-
-message("mlvg headers should be in: " ${MLVG_INCLUDE_DIR} )
-message("mlvg library should be at: " ${MLVG_LIBRARY_DIR}/${mlvg_NAME} )
 
 #--------------------------------------------------------------------
 # compile binary resources
@@ -245,8 +215,10 @@ endif()
 message("SDL2 headers should be in: " ${SDL2_INCLUDE_DIRS} )
 message("SDL2 libraries should be in: " ${SDL2_LIBRARIES_DIR} )
 target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2.lib")
-target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2main.lib")
+if(WIN32)
+    target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2.lib")
+    target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2main.lib")
+endif()
 
 # add include dirs
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source" )
@@ -255,33 +227,18 @@ target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/extern
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/utu" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/libresample/include" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
-target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/../loris/src" )
 
 
-# add madronalib library
-target_include_directories(${target} PRIVATE ${MADRONALIB_INCLUDE_DIR})
-if(APPLE)
-    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")   
-elseif(WIN32)
-    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
-endif()
+# add madronalib + manzanita via imported targets
+target_link_libraries(${target} PRIVATE madronalib::madronalib manzanita::manzanita)
 
 # add loris library
 target_include_directories(${target} PRIVATE ${LORIS_INCLUDE_DIR})
 if(APPLE)
-    target_link_libraries(${target} PRIVATE "${LORIS_LIBRARY_DIR}/lib${loris_NAME}.a")   
+    target_link_libraries(${target} PRIVATE "${LORIS_LIBRARY_DIR}/lib${loris_NAME}.a")
 elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${LORIS_LIBRARY_DIR}/${loris_NAME}.lib")
 endif()
-
-# add mlvg library
-target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
-if(APPLE)
-    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/lib${mlvg_NAME}.a")
-elseif(WIN32)
-    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/${mlvg_NAME}.lib")
-endif()
-target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 
 # add other external libraries
 target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
@@ -340,7 +297,6 @@ target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
 if(APPLE)
     target_link_libraries(${target} PRIVATE "-framework Cocoa" "-framework Metal" "-framework MetalKit"
       "-framework CoreAudio" "-framework AppKit" "-framework SDL2" )
-     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")  
      
      # add SDL2 framework location to @runpath 
      set_target_properties( ${target} PROPERTIES
@@ -362,19 +318,11 @@ if(APPLE)
 
   set(APP_BUNDLE ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Vutu.app)
   
-  # Mac OS Monterey, XCode 14.0
-  # set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/build/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
-    
-  # Mac OS Ventura, XCode 14.2 - looks like they changed the .xcent location
-  set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
-    
-  message("ENTITLEMENTS: " ${ENTITLEMENTS})
-
   # source location of the SDL2 framework. Get the latest dmg from
   # https://github.com/libsdl-org/SDL/releases and copy the .framework
   # to this location.
   SET(FRAMEWORK "/Library/Frameworks/SDL2.framework")
-  
+
   add_custom_command(
      TARGET ${target}
      POST_BUILD
@@ -383,10 +331,18 @@ if(APPLE)
          "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework"
   )
 
-  # Add build target for codesigning the framework bundle
+  # Ad-hoc codesign the embedded framework. We previously passed
+  # --entitlements pointing at the generated .xcent file, but its path
+  # has moved between Xcode versions:
+  #   Monterey / Xcode 14.0:   ${BIN_DIR}/build/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent
+  #   Ventura  / Xcode 14.2:   ${BIN_DIR}/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent
+  #   Xcode 26 (current):      unknown — neither of the above resolves, breaking the post-build phase.
+  # TODO: locate the .xcent path Xcode 26 uses and re-introduce --entitlements.
+  # For now we ad-hoc sign without entitlements; this is fine for dev because the
+  # SDL2 framework has no entitlement requirements of its own.
   add_custom_command(TARGET ${target}
       POST_BUILD
-      COMMAND codesign --force --sign "-" --entitlements ${ENTITLEMENTS} "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework/Versions/A"
+      COMMAND codesign --force --sign "-" "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework/Versions/A"
   )
 endif()
 

@@ -6,12 +6,12 @@
 
 #include "madronalib.h"
 
-#include "MLDialBasic.h"
-#include "MLTextButtonBasic.h"
-#include "MLResizer.h"
-#include "MLTextLabelBasic.h"
-#include "MLSVGImage.h"
-#include "MLSVGButtonBasic.h"
+#include "MZDialBasic.h"
+#include "MZTextButtonBasic.h"
+#include "MZResizer.h"
+#include "MZTextLabelBasic.h"
+#include "MZSVGImage.h"
+#include "MZSVGButtonBasic.h"
 
 #include "MLParameters.h"
 #include "MLSerialization.h"
@@ -37,9 +37,6 @@ VutuView::VutuView(TextFragment appName, size_t instanceNum) :
   Actor::start();
   std::cout << "VutuView: " << appName << " " << instanceNum << "\n";
 
-  // set initial size and limits
-  setSizeInGridUnits(kDefaultGridUnits);
-  setMinSizeInGridUnits(kDefaultGridUnits);
   setGridSizeDefault(kDefaultGridUnitSize);
 }
 
@@ -51,9 +48,10 @@ VutuView::~VutuView ()
 
 void VutuView::layoutView(DrawContext dc)
 {
-  Vec2 gridDims = getSizeInGridUnits();
-  int gx = gridDims.x();
-  int gy = gridDims.y();
+  Vec2 pixelSize = dc.coords.viewSizeInPixels;
+  float gridSize = dc.coords.gridSizeInPixels;
+  int gx = pixelSize.x() / gridSize;
+  int gy = pixelSize.y() / gridSize;
   
   // set grid size of entire view, for background and other drawing
   _view->setProperty("grid_units_x", gx);
@@ -153,11 +151,11 @@ void VutuView::layoutView(DrawContext dc)
 void VutuView::initializeResources(NativeDrawContext* nvg)
 {
   // initialize drawing properties before controls are made
-  _drawingProperties.setProperty("mark", colorToMatrix({0.01, 1.00, 0.01, 1.0}));
-  _drawingProperties.setProperty("background", colorToMatrix({0.01, 0.01, 0.01, 1.0}));
-  _drawingProperties.setProperty("panel_bg", colorToMatrix({0.01, 0.01, 0.01, 1.0}));
+  _drawingProperties.setProperty("mark", { 0.01f, 1.00f, 0.01f, 1.0f });
+  _drawingProperties.setProperty("background", { 0.01f, 0.01f, 0.01f, 1.0f });
+  _drawingProperties.setProperty("panel_bg", { 0.01f, 0.01f, 0.01f, 1.0f });
   _drawingProperties.setProperty("common_stroke_width", 1/24.f);
-  _drawingProperties.setProperty("partials", colorToMatrix({0.01, 1.00, 0.01, 1.0}));
+  _drawingProperties.setProperty("partials", { 0.01f, 1.00f, 0.01f, 1.0f });
 
   // DEBUG
   _drawingProperties.setProperty("draw_widget_bounds", false);
@@ -166,8 +164,8 @@ void VutuView::initializeResources(NativeDrawContext* nvg)
   if (nvg)
   {
       // fonts
-      _resources.fonts["d_din"] = std::make_unique< FontResource >(nvg, "MLVG_sans", resources::D_DIN_otf, resources::D_DIN_otf_size);
-      _resources.fonts["d_din_oblique"] = std::make_unique< FontResource >(nvg, "MLVG_italic", resources::D_DIN_Italic_otf, resources::D_DIN_Italic_otf_size);
+      _resources.fonts["d_din"] = std::make_unique< FontResource >(nvg, "MZ_sans", resources::D_DIN_otf, resources::D_DIN_otf_size);
+      _resources.fonts["d_din_oblique"] = std::make_unique< FontResource >(nvg, "MZ_italic", resources::D_DIN_Italic_otf, resources::D_DIN_Italic_otf_size);
   }
 }
 
@@ -178,7 +176,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   auto addControlLabel = [&](Path name, TextFragment t)
   {
     _view->_backgroundWidgets.add_unique< TextLabelBasic >(name, WithValues{
-      { "bounds", rectToMatrix(labelRect) },
+      { "bounds", toValue<Rect>(labelRect) },
       { "h_align", "center" },
       { "v_align", "middle" },
       { "text", t },
@@ -201,7 +199,7 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   auto addOtherLabel = [&](Path name, TextFragment t)
   {
     _view->_backgroundWidgets.add_unique< TextLabelBasic >(name, WithValues{
-      { "bounds", rectToMatrix(labelRect) },
+      { "bounds", toValue<Rect>(labelRect) },
       { "h_align", "right" },
       { "v_align", "middle" },
       { "text", t },
@@ -386,7 +384,7 @@ void VutuView::onMessage(Message msg)
           
           // store param value in local tree.
           Path paramName = tail(msg.address);
-          _params.setFromNormalizedValue(paramName, msg.value);
+          params_.setFromNormalizedValue(paramName, msg.value);
           
           // if the parameter change message is not from the controller,
           // forward it to the controller.
@@ -411,7 +409,7 @@ void VutuView::onMessage(Message msg)
         case(hash("set_source_data")):
         {
           // get Sample pointer
-          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
+          Sample* pSample = *reinterpret_cast<Sample* const*>(msg.value.data());
           _view->_widgets["source"]->receiveNamedRawPointer("sample", pSample);
           
           break;
@@ -420,7 +418,7 @@ void VutuView::onMessage(Message msg)
         case(hash("set_partials_data")):
         {
           // get Partials data pointer
-          VutuPartialsData* pPartials = *reinterpret_cast<VutuPartialsData**>(msg.value.getBlobValue());
+          VutuPartialsData* pPartials = *reinterpret_cast<VutuPartialsData* const*>(msg.value.data());
           _view->_widgets["partials"]->receiveNamedRawPointer("partials", pPartials);
           
           break;
@@ -429,7 +427,7 @@ void VutuView::onMessage(Message msg)
         case(hash("set_synth_data")):
         {
           // get Sample pointer
-          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
+          Sample* pSample = *reinterpret_cast<Sample* const*>(msg.value.data());
           _view->_widgets["synth"]->receiveNamedRawPointer("sample", pSample);
           
           break;
@@ -482,7 +480,7 @@ void VutuView::onMessage(Message msg)
           msg.address = tail(msg.address);
           auto widgetName = head(msg.address);
           msg.address = tail(msg.address);          
-          sendMessage(_view->_widgets[widgetName], msg);
+          sendMessage(_view->_widgets[runtimePath(widgetName)], msg);
           break;
         }
         default:

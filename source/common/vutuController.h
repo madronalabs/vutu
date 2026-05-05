@@ -5,9 +5,9 @@
 #pragma once
 
 #include "MLDSPSample.h"
-#include "MLFiles.h"
+#include "MZFiles.h"
 #include "MLPropertyTree.h"
-#include "MLAppController.h"
+#include "MZAppController.h"
 
 #include "vutuParameters.h"
 #include "vutuProcessor.h"
@@ -48,12 +48,12 @@ private:
   std::unique_ptr< Loris::PartialList > _lorisPartials;
   std::unique_ptr< VutuPartialsData > _vutuPartials;
 
-  int saveSampleToWavFile(const ml::Sample& signal, Path wavPath);
+  int saveSampleToWavFile(const ml::Sample& signal, TextPath wavPath);
 
-  int loadSampleFromPath(Path samplePath);
-  int loadPartialsFromPath(Path samplePath);
+  int loadSampleFromPath(TextPath samplePath);
+  int loadPartialsFromPath(TextPath samplePath);
 
-  void saveTextToPath(const TextFragment& text, Path savePath);
+  void saveTextToPath(const TextFragment& text, TextPath savePath);
 
   void showAnalysisInfo();
   void setAnalysisParamsFromPartials();
@@ -77,10 +77,10 @@ private:
 
   // file paths
   // TODO persist in app prefs
-  Path recentSamplesInPath;
-  Path recentSamplesOutPath;
-  Path recentPartialsInPath;
-  Path recentPartialsOutPath;
+  TextPath recentSamplesInPath;
+  TextPath recentSamplesOutPath;
+  TextPath recentPartialsInPath;
+  TextPath recentPartialsOutPath;
 
   File sourceFileLoaded;
   

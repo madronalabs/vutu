@@ -9,11 +9,11 @@
 #include "MLPlatform.h"
 #include "MLSignalProcessor.h"
 #include "MLDSPUtils.h"
-#include "vutuParameters.h"
-#include "MLRtAudioProcessor.h"
+#include "MLAudioContext.h"
+#include "MLAudioTask.h"
 #include "MLActor.h"
-#include "MLMath2D.h"
 #include "MLDSPSample.h"
+#include "vutuParameters.h"
 
 #include "loris.h"
 
@@ -25,42 +25,42 @@ constexpr int kSampleRate = 48000;
 
 void readParameterDescriptions(ParameterDescriptionList& params);
 
+class VutuProcessor;
+
+// audio process function, registered with AudioTask.
+void processVutu(AudioContext* ctx, VutuProcessor* state);
 
 class VutuProcessor final :
-public RtAudioProcessor
+  public SignalProcessor,
+  public Actor
 {
-  // sine generators.
-  SineGen testSine;
-  
 public:
   VutuProcessor(TextFragment appName, size_t instanceNum,
-                   size_t nInputs, size_t nOutputs,
-                   int sampleRate, const ParameterDescriptionList& pdl);
+                const ParameterDescriptionList& pdl);
   ~VutuProcessor() = default;
-  
-  void processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused) override;
 
   void onMessage(Message msg) override;
-  
+
 private:
-  
+  friend void processVutu(AudioContext* ctx, VutuProcessor* state);
+
+  // sine generator for test tone
+  SineGen<float> testSine;
+
   Path _controllerName;
-  
+
   int testCounter{0};
-  
+
   Symbol playbackState{"off"};
   size_t playbackSampleIdx{0};
-  //size_t playbackCounter{0};
-  
+
   Interval analysisInterval{0, 0};
-  
+
   ml::Sample* _pSourceSampleInController{nullptr};
   ml::Sample _sourceSample;
   ml::Sample* _pSynthesizedSample{nullptr};
 
-
   Loris::PartialList* _pLorisPartials{ nullptr };
 
   void togglePlaybackState(Symbol whichSample);
-
 };

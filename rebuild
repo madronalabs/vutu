@@ -1,0 +1,40 @@
+#!/bin/bash
+set -e
+
+VUTU_ROOT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LORIS_ROOT="$VUTU_ROOT/../loris"
+
+if [ ! -d "$LORIS_ROOT" ]; then
+    echo "loris source not found at $LORIS_ROOT"
+    echo "expected as a sibling of vutu (Madrona Labs dev-tree convention)"
+    exit 1
+fi
+
+# --- build loris as a universal (arm64+x86_64) static library ---
+# loris is a third-party autotools project; we drive its build from here so
+# vutu can link a universal libloris.a regardless of the host arch.
+ARCH_FLAGS="-arch arm64 -arch x86_64 -mmacosx-version-min=10.14"
+
+(
+    cd "$LORIS_ROOT"
+    make -C src distclean >/dev/null 2>&1 || true
+    ./configure \
+        CFLAGS="$ARCH_FLAGS" \
+        CXXFLAGS="$ARCH_FLAGS" \
+        LDFLAGS="$ARCH_FLAGS" \
+        --disable-dependency-tracking
+    make -C src
+    sudo make -C src install
+)
+
+# --- build vutu ---
+# Vutu is a standalone app: configure with Xcode, then build Debug.
+# (No install step — there's no library to publish.)
+if [ ! -d "$VUTU_ROOT/build/Vutu.xcodeproj" ]; then
+    cmake -S "$VUTU_ROOT" -B "$VUTU_ROOT/build" -GXcode
+fi
+
+cd "$VUTU_ROOT/build"
+xcodebuild build -configuration Debug -target Vutu
+
+echo "Done."

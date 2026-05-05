@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "MLAppView.h"
-#include "MLPlatformView.h"
-#include "MLWidget.h"
-#include "MLView.h"
+#include "MZAppView.h"
+#include "MZPlatformView.h"
+#include "MZWidget.h"
+#include "MZView.h"
 
 #include "vutuParameters.h"
 
@@ -30,6 +30,7 @@ public:
 
   // AppView interface
   void initializeResources(NativeDrawContext* nvg) override;
+  void clearResources() override {}
   void layoutView(DrawContext dc) override;
   void onGUIEvent(const GUIEvent& event) override {};
   void onResize(Vec2 newSize) override {};

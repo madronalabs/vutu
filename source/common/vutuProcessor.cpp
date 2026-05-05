@@ -28,13 +28,13 @@ constexpr float kLevelLo = 0.5f, kLevelHi = 2.f;
 size_t getStartFrame(const ml::Sample& sample, Interval srcInterval)
 {
   auto interval = srcInterval * getFrames(sample);
-  return interval.mX1;
+  return interval.x1;
 }
 
 size_t getEndFrame(const ml::Sample& sample, Interval srcInterval)
 {
   auto interval = srcInterval * getFrames(sample);
-  return interval.mX2;
+  return interval.x2;
 }
 
 
@@ -139,7 +139,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "analysis_interval" },
-    { "default", Interval{0, 1} }
+    { "default", Value{0.f, 1.f} }
   } ) );
 }
 
@@ -200,72 +200,63 @@ void resample(const ml::Sample* pSrc, ml::Sample* pDest)
 }
 
 VutuProcessor::VutuProcessor(TextFragment appName, size_t instanceNum,
-                 size_t nInputs, size_t nOutputs,
-                 int sampleRate, const ParameterDescriptionList& pdl) :
-RtAudioProcessor(nInputs, nOutputs, sampleRate)
+                             const ParameterDescriptionList& pdl)
 {
   // get names of other Actors we might communicate with
   _controllerName = TextFragment(appName, "controller", ml::textUtils::naturalNumberToText(instanceNum));
-  
+
   // register ourself
   auto myName = TextFragment(appName, "processor", ml::textUtils::naturalNumberToText(instanceNum));
   registerActor(myName, this);
-  
-  buildParameterTree(pdl, _params);
-  setDefaults(_params);
+
+  buildParams(pdl);
+  setDefaultParams();
 }
 
-// declare the processVector function that will run our DSP in vectors of size kFloatsPerDSPVector
-// with the nullptr constructor argument above, RtAudioProcessor
-void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused)
+// audio process function: runs DSP in vectors of size kFramesPerBlock,
+// invoked by AudioTask through the AudioContext.
+void processVutu(AudioContext* ctx, VutuProcessor* state)
 {
-  // TEST
-  int sr = _processData.sampleRate;
-  testCounter += kFloatsPerDSPVector;
-  bool test{false};
-  if(testCounter >= sr)
+  auto& params = state->getParameterTree();
+  int sr = ctx->getSampleRate();
+  if(sr <= 0) sr = kSampleRate;
+
+  state->testCounter += kFramesPerBlock;
+  if(state->testCounter >= sr)
   {
-    test = true;
-    testCounter -= sr;
+    state->testCounter -= sr;
   }
-  if(test)
-  {
-    //std::cout << "playbackState: " << playbackState << "\n";
-    //std::cout << "playbackSampleIdx: " << playbackSampleIdx << "\n";
-    //std::cout << "analysis interval: " << _params.getRealValue("analysis_interval").getIntervalValue() << "\n";
-  }
-  
-  // get params from the SignalProcessor.
-  float gain = _params.getRealFloatValue("output_volume");
+
+  float gain = params.getRealFloatValueAtPath("output_volume");
   float amp = dBToAmp(gain);
-  
+
   // test amp is not in dB so it can go to 0. TODO -inf dB setting
-  float testAmp = _params.getRealFloatValue("test_volume");
-  float testFreq = _params.getRealFloatValue("fundamental");
+  float testAmp = params.getRealFloatValueAtPath("test_volume");
+  float testFreq = params.getRealFloatValueAtPath("fundamental");
 
-  auto sineVec = testSine(testFreq / sr)*DSPVector(testAmp);
+  auto sineVec = state->testSine(testFreq / sr)*SignalBlock(testAmp);
 
-  DSPVector sampleVec;
-  
+  SignalBlock sampleVec;
+
   ml::Sample* samplePlaying{ nullptr };
   Symbol viewProperty;
 
+  size_t frameEnd{0};
 
-  size_t frameEnd;
-  
-  if(playbackState == "source")
+  if(state->playbackState == "source")
   {
     // source: play analysis interval portion
-    samplePlaying = &_sourceSample;
-    auto interval = _params.getRealValue("analysis_interval").getIntervalValue();
+    samplePlaying = &state->_sourceSample;
+    auto arr = params.getRealValueAtPath("analysis_interval").getFloatArray<2>();
+    Interval interval{arr[0], arr[1]};
     frameEnd = getEndFrame(*samplePlaying, interval);
 
     viewProperty = "source_time";
   }
-  else if(playbackState == "synth")
+  else if(state->playbackState == "synth")
   {
     // synthesized: play entire length
-    samplePlaying = _pSynthesizedSample;
+    samplePlaying = state->_pSynthesizedSample;
     frameEnd = getEndFrame(*samplePlaying, {0, 1});
     viewProperty = "synth_time";
   }
@@ -274,23 +265,23 @@ void VutuProcessor::processVector(MainInputs inputs, MainOutputs outputs, void *
   {
     if(getFrames(*samplePlaying) > 0)
     {
-      load(sampleVec, getFramePtr(*samplePlaying, playbackSampleIdx));
-      playbackSampleIdx += kFloatsPerDSPVector;
+      load(sampleVec, getFramePtr(*samplePlaying, state->playbackSampleIdx));
+      state->playbackSampleIdx += kFramesPerBlock;
     }
-    
-    if(playbackSampleIdx >= frameEnd - kFloatsPerDSPVector)
-    {
-      playbackState = "off";
-      playbackSampleIdx = 0;
-      sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
-    }
-    
-    float playbackTime = float(playbackSampleIdx) / float(sr);
 
-    sendMessageToActor(_controllerName, Message{Path{"set_prop", viewProperty}, playbackTime});
+    if(state->playbackSampleIdx >= frameEnd - kFramesPerBlock)
+    {
+      state->playbackState = "off";
+      state->playbackSampleIdx = 0;
+      sendMessageToActor(state->_controllerName, Message{"do/playback_stopped"});
+    }
+
+    float playbackTime = float(state->playbackSampleIdx) / float(sr);
+
+    sendMessageToActor(state->_controllerName, Message{Path{Path{"set_prop"}, runtimePath(viewProperty)}, playbackTime});
   }
-  
-  outputs[0] = outputs[1] = sampleVec*amp + sineVec;
+
+  ctx->outputs[0] = ctx->outputs[1] = sampleVec*amp + sineVec;
 }
 
 // toggle current playback state and tell controller
@@ -315,7 +306,8 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
       {
         // start playback at analysis interval start
         playbackState = "source";
-        auto interval = _params.getRealValue("analysis_interval").getIntervalValue();
+        auto arr = params_.getRealValueAtPath("analysis_interval").getFloatArray<2>();
+        Interval interval{arr[0], arr[1]};
         playbackSampleIdx = getStartFrame(_sourceSample, interval);
         sendMessageToActor(_controllerName, Message{"do/playback_started/source"});
       }
@@ -344,7 +336,7 @@ void VutuProcessor::onMessage(Message msg)
   {
     case(hash("set_param")):
     {
-      _params.setFromNormalizedValue(tail(msg.address), msg.value);
+      params_.setFromNormalizedValue(tail(msg.address), msg.value);
       break;
     }
     case(hash("set_prop")):
@@ -361,9 +353,9 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          _pSourceSampleInController = *reinterpret_cast<ml::Sample**>(msg.value.getBlobValue());
+          _pSourceSampleInController = *reinterpret_cast<ml::Sample* const*>(msg.value.data());
           
-          int currentSampleRate = _processData.sampleRate;
+          int currentSampleRate = kSampleRate;
 //          std::cout << "VutuProcessor: sr = " << currentSampleRate << "\n";
   //        std::cout << "    sample input: sr = " << _pSourceSampleInController->sampleRate << "\n";
           
@@ -380,8 +372,8 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          Loris::PartialList* pPartials = *reinterpret_cast<Loris::PartialList**>(msg.value.getBlobValue());
-          _pLorisPartials = *reinterpret_cast<Loris::PartialList**>(msg.value.getBlobValue());
+          Loris::PartialList* pPartials = *reinterpret_cast<Loris::PartialList* const*>(msg.value.data());
+          _pLorisPartials = *reinterpret_cast<Loris::PartialList* const*>(msg.value.data());
           
 
  //         std::cout << "VutuProcessor: got new loris partials: n = " << _pLorisPartials->size() << "\n";
@@ -395,7 +387,7 @@ void VutuProcessor::onMessage(Message msg)
           sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
           
           // get pointer from message
-          _pSynthesizedSample = *reinterpret_cast<ml::Sample**>(msg.value.getBlobValue());
+          _pSynthesizedSample = *reinterpret_cast<ml::Sample* const*>(msg.value.data());
 
           break;
         }
