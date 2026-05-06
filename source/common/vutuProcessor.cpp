@@ -227,12 +227,16 @@ void processVutu(AudioContext* ctx, VutuProcessor* state)
     state->testCounter -= sr;
   }
 
-  float gain = params.getRealFloatValueAtPath("output_volume");
+  // Use the getRealFloatValue / getRealValue macros (not the *AtPath variants):
+  // they expand to a compile-time HashPath lookup with zero runtime cost. The
+  // *AtPath forms construct a Path from const char* via runtimePath(), which
+  // takes the SymbolTable mutex — not safe to call from the audio thread.
+  float gain = params.getRealFloatValue("output_volume");
   float amp = dBToAmp(gain);
 
   // test amp is not in dB so it can go to 0. TODO -inf dB setting
-  float testAmp = params.getRealFloatValueAtPath("test_volume");
-  float testFreq = params.getRealFloatValueAtPath("fundamental");
+  float testAmp = params.getRealFloatValue("test_volume");
+  float testFreq = params.getRealFloatValue("fundamental");
 
   auto sineVec = state->testSine(testFreq / sr)*SignalBlock(testAmp);
 
@@ -247,7 +251,7 @@ void processVutu(AudioContext* ctx, VutuProcessor* state)
   {
     // source: play analysis interval portion
     samplePlaying = &state->_sourceSample;
-    auto arr = params.getRealValueAtPath("analysis_interval").getFloatArray<2>();
+    auto arr = params.getRealValue("analysis_interval").getFloatArray<2>();
     Interval interval{arr[0], arr[1]};
     frameEnd = getEndFrame(*samplePlaying, interval);
 
@@ -306,7 +310,7 @@ void VutuProcessor::togglePlaybackState(Symbol whichSample)
       {
         // start playback at analysis interval start
         playbackState = "source";
-        auto arr = params_.getRealValueAtPath("analysis_interval").getFloatArray<2>();
+        auto arr = params_.getRealValue("analysis_interval").getFloatArray<2>();
         Interval interval{arr[0], arr[1]};
         playbackSampleIdx = getStartFrame(_sourceSample, interval);
         sendMessageToActor(_controllerName, Message{"do/playback_started/source"});

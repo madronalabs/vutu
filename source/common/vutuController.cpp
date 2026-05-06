@@ -365,7 +365,7 @@ int VutuController::analyzeSample()
   auto totalFrames = getFrames(_sourceSample);
   if(!totalFrames) return status;
   
-  auto intervalArr = params.getRealValueAtPath("analysis_interval").getFloatArray<2>();
+  auto intervalArr = params.getRealValue("analysis_interval").getFloatArray<2>();
   Interval interval{intervalArr[0], intervalArr[1]};
   auto frameInterval = interval*float(totalFrames);
   
@@ -498,7 +498,7 @@ void VutuController::synthesize()
   const float kFadeTime = 0.001f;
 
   // get frames in analysis interval to use for output length. Length of synthesis will be shorter.
-  auto intervalArr = params.getRealValueAtPath("analysis_interval").getFloatArray<2>();
+  auto intervalArr = params.getRealValue("analysis_interval").getFloatArray<2>();
   Interval analysisInterval{intervalArr[0], intervalArr[1]};
   float duration = _vutuPartials->sourceDuration*(analysisInterval.x2 -  analysisInterval.x1);
   int framesAnalyzed = duration*synthParams.sampleRate;
