@@ -45,13 +45,16 @@ on:
 env:
   # Pin third-party versions for reproducibility. Bump deliberately.
   SDL_VERSION: 2.32.8
-  LORIS_VERSION: 1.8
   # Madrona Labs deps follow the dev-tree convention: cloned as siblings of
-  # vutu and rebuilt+installed via their own `rebuild` scripts.
+  # vutu and rebuilt+installed via their own `rebuild` scripts. Loris is a
+  # mirror of the SourceForge upstream maintained at madrona-labs/loris;
+  # cloning from there avoids SourceForge's flaky download endpoints.
   MADRONALIB_REPO: https://github.com/madrona-labs/madronalib
   MADRONALIB_REF: main
   MANZANITA_REPO: https://github.com/madrona-labs/manzanita
   MANZANITA_REF: main
+  LORIS_REPO: https://github.com/madrona-labs/loris
+  LORIS_REF: main
 
 jobs:
   build-macos:
@@ -94,14 +97,11 @@ jobs:
           cd "$GITHUB_WORKSPACE/.."
           git clone --depth=1 --branch "$MANZANITA_REF" "$MANZANITA_REPO" manzanita
 
-      - name: Download loris source (sibling of vutu)
+      - name: Clone loris (sibling of vutu)
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/.."
-          curl -L -o loris.tar.gz \
-            "https://downloads.sourceforge.net/project/loris/loris/${LORIS_VERSION}/loris-${LORIS_VERSION}.tar.gz"
-          tar -xzf loris.tar.gz
-          mv "loris-${LORIS_VERSION}" loris
+          git clone --depth=1 --branch "$LORIS_REF" "$LORIS_REPO" loris
 
       - name: Install SDL2.framework
         run: |
@@ -187,14 +187,11 @@ jobs:
           cd "$GITHUB_WORKSPACE/.."
           git clone --depth=1 --branch "$MANZANITA_REF" "$MANZANITA_REPO" manzanita
 
-      - name: Download loris source (sibling of vutu)
+      - name: Clone loris (sibling of vutu)
         run: |
           set -e
           cd "$GITHUB_WORKSPACE/.."
-          curl -L -o loris.tar.gz \
-            "https://downloads.sourceforge.net/project/loris/loris/${LORIS_VERSION}/loris-${LORIS_VERSION}.tar.gz"
-          tar -xzf loris.tar.gz
-          mv "loris-${LORIS_VERSION}" loris
+          git clone --depth=1 --branch "$LORIS_REF" "$LORIS_REPO" loris
 
       - name: Install SDL2.framework
         run: |
@@ -264,7 +261,7 @@ jobs:
             echo ""
             echo "**Build type:** \`${{ github.event.inputs.build-type || 'Debug' }}\`"
             echo "**SDL2:** \`${{ env.SDL_VERSION }}\`"
-            echo "**Loris:** \`${{ env.LORIS_VERSION }}\`"
+            echo "**Loris:** \`${{ env.LORIS_REF }}\`"
             echo "**madronalib:** \`${{ env.MADRONALIB_REF }}\`"
             echo "**manzanita:** \`${{ env.MANZANITA_REF }}\`"
           } >> $GITHUB_STEP_SUMMARY
