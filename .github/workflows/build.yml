@@ -61,21 +61,23 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Generate a GitHub App token and configure git's insteadOf so that any
-      # subsequent `git clone https://github.com/madrona-labs/...` (including
-      # ones run by actions/checkout) authenticates as the app. This is what
-      # lets us pull private madrona-labs repos like manzanita.
+      # Vutu itself is public, so its checkout doesn't need a token. We do
+      # this first so that the local composite action below (referenced by
+      # `./.github/actions/...`) actually exists on disk when GitHub Actions
+      # tries to resolve it.
+      - name: Checkout vutu
+        uses: actions/checkout@v4
+
+      # Generate a GitHub App token and configure git's insteadOf so that
+      # subsequent `git clone https://github.com/madrona-labs/...` calls
+      # authenticate as the app. This is what lets us pull private
+      # madrona-labs repos like manzanita.
       - name: Setup Madrona Labs auth
         id: auth
         uses: ./.github/actions/setup-madrona-auth
         with:
           app-id: ${{ secrets.APP_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - name: Checkout vutu
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.auth.outputs.token }}
 
       # The rest of this job runs in the parent of the vutu checkout so that
       # madronalib / manzanita / loris end up as siblings, matching the
@@ -163,17 +165,15 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout vutu
+        uses: actions/checkout@v4
+
       - name: Setup Madrona Labs auth
         id: auth
         uses: ./.github/actions/setup-madrona-auth
         with:
           app-id: ${{ secrets.APP_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - name: Checkout vutu
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.auth.outputs.token }}
 
       - name: Clone madronalib (sibling of vutu)
         run: |
