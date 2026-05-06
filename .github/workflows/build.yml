@@ -58,9 +58,24 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build-macos == 'true' }}
     name: macOS (Apple Silicon)
     runs-on: macos-15
+    permissions:
+      contents: read
     steps:
+      # Generate a GitHub App token and configure git's insteadOf so that any
+      # subsequent `git clone https://github.com/madrona-labs/...` (including
+      # ones run by actions/checkout) authenticates as the app. This is what
+      # lets us pull private madrona-labs repos like manzanita.
+      - name: Setup Madrona Labs auth
+        id: auth
+        uses: madrona-labs/madrona-ci/.github/actions/setup-madrona-auth@main
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Checkout vutu
         uses: actions/checkout@v4
+        with:
+          token: ${{ steps.auth.outputs.token }}
 
       # The rest of this job runs in the parent of the vutu checkout so that
       # madronalib / manzanita / loris end up as siblings, matching the
@@ -145,9 +160,20 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build-macos-intel == 'true' }}
     name: macOS (Intel)
     runs-on: macos-15-intel
+    permissions:
+      contents: read
     steps:
+      - name: Setup Madrona Labs auth
+        id: auth
+        uses: madrona-labs/madrona-ci/.github/actions/setup-madrona-auth@main
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Checkout vutu
         uses: actions/checkout@v4
+        with:
+          token: ${{ steps.auth.outputs.token }}
 
       - name: Clone madronalib (sibling of vutu)
         run: |
