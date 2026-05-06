@@ -1,0 +1,244 @@
+# Vutu build pipeline
+# Builds the application and its dependency stack (madronalib, manzanita, loris,
+# SDL2) on macOS Apple Silicon and macOS Intel.
+#
+# Triggers:
+#   - push to main, fix/**, ci/**, or feature/** branches
+#   - PRs targeting main
+#   - manual dispatch (with build type and per-platform toggles)
+#
+# Windows and Linux are currently out of scope — vutu's CMakeLists has no
+# working build path for either: Windows references `C:/Program Files/loris`
+# but loris (autotools) has no MSVC build, and the Linux branches in
+# CMakeLists are empty placeholders. Add those build paths first, then add
+# matching CI jobs here.
+
+name: build vutu
+
+on:
+  push:
+    branches: [main, 'fix/**', 'ci/**', 'feature/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: 'Build type'
+        required: false
+        default: 'Debug'
+        type: choice
+        options:
+          - Debug
+          - Release
+          - RelWithDebInfo
+      build-macos:
+        description: 'Build for macOS (Apple Silicon)'
+        required: false
+        default: true
+        type: boolean
+      build-macos-intel:
+        description: 'Build for macOS (Intel — exercises x86_64 universal slice)'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  # Pin third-party versions for reproducibility. Bump deliberately.
+  SDL_VERSION: 2.32.8
+  LORIS_VERSION: 1.8
+  # Madrona Labs deps follow the dev-tree convention: cloned as siblings of
+  # vutu and rebuilt+installed via their own `rebuild` scripts.
+  MADRONALIB_REPO: https://github.com/madrona-labs/madronalib
+  MADRONALIB_REF: main
+  MANZANITA_REPO: https://github.com/madrona-labs/manzanita
+  MANZANITA_REF: main
+
+jobs:
+  build-macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build-macos == 'true' }}
+    name: macOS (Apple Silicon)
+    runs-on: macos-15
+    steps:
+      - name: Checkout vutu
+        uses: actions/checkout@v4
+
+      # The rest of this job runs in the parent of the vutu checkout so that
+      # madronalib / manzanita / loris end up as siblings, matching the
+      # dev-tree layout vutu's CMakeLists expects (see ../loris/src in particular).
+      - name: Clone madronalib (sibling of vutu)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/.."
+          git clone --depth=1 --branch "$MADRONALIB_REF" "$MADRONALIB_REPO" madronalib
+
+      - name: Clone manzanita (sibling of vutu)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/.."
+          git clone --depth=1 --branch "$MANZANITA_REF" "$MANZANITA_REPO" manzanita
+
+      - name: Download loris source (sibling of vutu)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/.."
+          curl -L -o loris.tar.gz \
+            "https://downloads.sourceforge.net/project/loris/loris/${LORIS_VERSION}/loris-${LORIS_VERSION}.tar.gz"
+          tar -xzf loris.tar.gz
+          mv "loris-${LORIS_VERSION}" loris
+
+      - name: Install SDL2.framework
+        run: |
+          set -e
+          curl -L -o /tmp/SDL2.dmg \
+            "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL2-${SDL_VERSION}.dmg"
+          hdiutil attach /tmp/SDL2.dmg -nobrowse -mountpoint /Volumes/SDL2
+          sudo ditto /Volumes/SDL2/SDL2.framework /Library/Frameworks/SDL2.framework
+          hdiutil detach /Volumes/SDL2
+
+      - name: Build & install madronalib
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/../madronalib"
+          ./rebuild
+
+      - name: Build & install manzanita
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/../manzanita"
+          ./rebuild
+
+      - name: Build vutu (and loris universal as a side effect)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE"
+          ./rebuild
+
+      - name: Verify universal binary
+        run: |
+          set -e
+          BIN="$GITHUB_WORKSPACE/build/Debug/Vutu.app/Contents/MacOS/Vutu"
+          test -x "$BIN" || { echo "Vutu binary not found at $BIN"; exit 1; }
+          ARCHS=$(lipo -archs "$BIN")
+          echo "archs: $ARCHS"
+          echo "$ARCHS" | grep -q "arm64"
+          echo "$ARCHS" | grep -q "x86_64"
+
+      - name: Package app
+        # Use ditto rather than zip/tar so symlinks (e.g. SDL2.framework/Versions/Current)
+        # and executable bits are preserved. actions/upload-artifact zips naively
+        # and would otherwise break the .app bundle.
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/build/Debug"
+          ditto -c -k --keepParent Vutu.app Vutu.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vutu-macos-arm-Debug
+          path: build/Debug/Vutu.zip
+          if-no-files-found: error
+
+  build-macos-intel:
+    # Intel macOS runner — exercises the x86_64 slice of the universal binary
+    # natively. The arm64 runner only executes the arm64 slice.
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build-macos-intel == 'true' }}
+    name: macOS (Intel)
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout vutu
+        uses: actions/checkout@v4
+
+      - name: Clone madronalib (sibling of vutu)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/.."
+          git clone --depth=1 --branch "$MADRONALIB_REF" "$MADRONALIB_REPO" madronalib
+
+      - name: Clone manzanita (sibling of vutu)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/.."
+          git clone --depth=1 --branch "$MANZANITA_REF" "$MANZANITA_REPO" manzanita
+
+      - name: Download loris source (sibling of vutu)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/.."
+          curl -L -o loris.tar.gz \
+            "https://downloads.sourceforge.net/project/loris/loris/${LORIS_VERSION}/loris-${LORIS_VERSION}.tar.gz"
+          tar -xzf loris.tar.gz
+          mv "loris-${LORIS_VERSION}" loris
+
+      - name: Install SDL2.framework
+        run: |
+          set -e
+          curl -L -o /tmp/SDL2.dmg \
+            "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL2-${SDL_VERSION}.dmg"
+          hdiutil attach /tmp/SDL2.dmg -nobrowse -mountpoint /Volumes/SDL2
+          sudo ditto /Volumes/SDL2/SDL2.framework /Library/Frameworks/SDL2.framework
+          hdiutil detach /Volumes/SDL2
+
+      - name: Build & install madronalib
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/../madronalib"
+          ./rebuild
+
+      - name: Build & install manzanita
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/../manzanita"
+          ./rebuild
+
+      - name: Build vutu (and loris universal as a side effect)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE"
+          ./rebuild
+
+      - name: Verify universal binary
+        run: |
+          set -e
+          BIN="$GITHUB_WORKSPACE/build/Debug/Vutu.app/Contents/MacOS/Vutu"
+          test -x "$BIN" || { echo "Vutu binary not found at $BIN"; exit 1; }
+          ARCHS=$(lipo -archs "$BIN")
+          echo "archs: $ARCHS"
+          echo "$ARCHS" | grep -q "arm64"
+          echo "$ARCHS" | grep -q "x86_64"
+
+      - name: Package app
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/build/Debug"
+          ditto -c -k --keepParent Vutu.app Vutu.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vutu-macos-intel-Debug
+          path: build/Debug/Vutu.zip
+          if-no-files-found: error
+
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build-macos, build-macos-intel]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          {
+            echo "## Vutu Build Results"
+            echo ""
+            echo "| Platform | Status |"
+            echo "|----------|--------|"
+            echo "| macOS (Apple Silicon) | ${{ needs.build-macos.result == 'success' && '✅ Success' || needs.build-macos.result == 'skipped' && 'Skipped' || '❌ Failed' }} |"
+            echo "| macOS (Intel) | ${{ needs.build-macos-intel.result == 'success' && '✅ Success' || needs.build-macos-intel.result == 'skipped' && 'Skipped' || '❌ Failed' }} |"
+            echo ""
+            echo "**Build type:** \`${{ github.event.inputs.build-type || 'Debug' }}\`"
+            echo "**SDL2:** \`${{ env.SDL_VERSION }}\`"
+            echo "**Loris:** \`${{ env.LORIS_VERSION }}\`"
+            echo "**madronalib:** \`${{ env.MADRONALIB_REF }}\`"
+            echo "**manzanita:** \`${{ env.MANZANITA_REF }}\`"
+          } >> $GITHUB_STEP_SUMMARY
