@@ -1,0 +1,53 @@
+# Composite action: generate a GitHub App token and configure git to use it.
+#
+# Used by build.yml to clone private madrona-labs repos (manzanita today,
+# possibly others later) without exposing PATs in the workflow file.
+#
+# This is vendored from madrona-labs/madrona-ci.
+# Keep this in sync with the upstream definition if it changes:
+#   madrona-labs/madrona-ci/.github/actions/setup-madrona-auth/action.yml
+#
+# Usage:
+#   - name: Setup Madrona Labs auth
+#     id: auth
+#     uses: ./.github/actions/setup-madrona-auth
+#     with:
+#       app-id: ${{ secrets.APP_ID }}
+#       app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+name: Setup Madrona Labs Auth
+description: Generate GitHub App token and configure git for private repo access
+
+inputs:
+  app-id:
+    description: 'GitHub App ID'
+    required: true
+  app-private-key:
+    description: 'GitHub App private key'
+    required: true
+
+outputs:
+  token:
+    description: 'GitHub App token for authentication'
+    value: ${{ steps.app-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate GitHub App Token
+      id: app-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: madrona-labs
+
+    - name: Configure git authentication
+      shell: bash
+      run: |
+        # Disable credential helpers that might prompt for input
+        git config --global credential.helper ""
+        # Use token for madrona-labs private repos
+        git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/madrona-labs/".insteadOf "https://github.com/madrona-labs/"
+        # Rewrite SSH URLs to HTTPS (for submodules)
+        git config --global url."https://github.com/".insteadOf "git@github.com:"
