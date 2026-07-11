@@ -17,13 +17,17 @@
 #include "utuSpectrum.h"
 #include "utuWindow.h"
 
+#include "utuAnalyzer.h"
 #include "utuBandwidth.h"
 #include "utuPeaks.h"
 
 // old Loris, reference engine
 #include "AiffFile.h"
+#include "Analyzer.h"
 #include "AssociateBandwidth.h"
 #include "KaiserWindow.h"
+#include "Partial.h"
+#include "PartialList.h"
 #include "ReassignedSpectrum.h"
 #include "SpectralPeakSelector.h"
 
@@ -516,6 +520,203 @@ int peaksTest(const char* path, bool withBandwidth)
   return pass ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// analyze-test: full analysis pipeline vs Loris::Analyzer (M6 + M7)
+
+struct TrackInfo
+{
+  double t0{0}, t1{0};  // start/end time in seconds
+  double f0{0};         // frequency at start
+  double energy{0};     // sum of amp²·dt over segments
+  long nbp{0};
+  int index{-1};
+  bool matched{false};
+};
+
+// linear interpolation into a VutuPartial at time t (within its range)
+void utuPartialAt(const ml::VutuPartial& p, double t, double& freq, double& amp)
+{
+  size_t i1 = 0, i2 = 1;
+  for (size_t i = 1; i < p.time.size(); ++i)
+  {
+    if (t < p.time[i])
+    {
+      i1 = i - 1;
+      i2 = i;
+      break;
+    }
+    i1 = i - 1;
+    i2 = i;
+  }
+  const double t1 = p.time[i1], t2 = p.time[i2];
+  const double frac = (t2 > t1) ? (t - t1) / (t2 - t1) : 0.;
+  freq = p.freq[i1] + frac * (p.freq[i2] - p.freq[i1]);
+  amp = p.amp[i1] + frac * (p.amp[i2] - p.amp[i1]);
+}
+
+int analyzeTest(const char* path)
+{
+  Loris::AiffFile file(path);
+  const double sr = file.sampleRate();
+  std::vector<double>& samplesD = file.samples();
+  const long nSamples = long(samplesD.size());
+  std::vector<float> samplesF(samplesD.begin(), samplesD.end());
+  printf("%s: %ld samples at %g Hz\n", path, nSamples, sr);
+
+  const double resolutionHz = 80.;
+  const double widthHz = 160.;
+
+  // Loris reference: full analyzer, all defaults from (res, width)
+  Loris::Analyzer lorisAnalyzer(resolutionHz, widthHz);
+  Loris::PartialList lorisPartials =
+      lorisAnalyzer.analyze(samplesD.data(), samplesD.data() + nSamples, sr);
+
+  ml::utu::AnalyzerParams params;
+  params.sampleRate = float(sr);
+  params.resolution = float(resolutionHz);
+  params.windowWidth = float(widthHz);
+  auto result = ml::utu::analyzeToPartials(samplesF.data(), nSamples, params);
+
+  // collect track info from both engines
+  std::vector<TrackInfo> lt, mt;
+  {
+    int idx = 0;
+    for (const Loris::Partial& p : lorisPartials)
+    {
+      TrackInfo t;
+      t.t0 = p.startTime();
+      t.t1 = p.endTime();
+      t.f0 = p.first().frequency();
+      t.nbp = long(p.numBreakpoints());
+      auto it = p.begin();
+      double prevT = it.time(), prevA = it.breakpoint().amplitude();
+      for (++it; it != p.end(); ++it)
+      {
+        const double dt = it.time() - prevT;
+        const double a = it.breakpoint().amplitude();
+        t.energy += 0.5 * (a * a + prevA * prevA) * dt;
+        prevT = it.time();
+        prevA = a;
+      }
+      t.index = idx++;
+      lt.push_back(t);
+    }
+    idx = 0;
+    for (const ml::VutuPartial& p : result->partials)
+    {
+      TrackInfo t;
+      t.t0 = p.time.front();
+      t.t1 = p.time.back();
+      t.f0 = p.freq.front();
+      t.nbp = long(p.time.size());
+      for (size_t i = 1; i < p.time.size(); ++i)
+      {
+        const double dt = double(p.time[i]) - p.time[i - 1];
+        t.energy += 0.5 * (double(p.amp[i]) * p.amp[i] + double(p.amp[i - 1]) * p.amp[i - 1]) * dt;
+      }
+      t.index = idx++;
+      mt.push_back(t);
+    }
+  }
+
+  // greedy matching: tracks born from the same peak stream have nearly
+  // identical start time and start frequency
+  auto byStart = [](const TrackInfo& a, const TrackInfo& b)
+  { return (a.t0 != b.t0) ? (a.t0 < b.t0) : (a.f0 < b.f0); };
+  std::sort(lt.begin(), lt.end(), byStart);
+  std::sort(mt.begin(), mt.end(), byStart);
+
+  const double hopTime = 1. / widthHz;
+  const double startTimeTol = 1.5 * hopTime;
+  const double startFreqTol = std::max(1., resolutionHz / 4.);
+
+  double lorisEnergyTotal = 0., matchedEnergy = 0.;
+  long matched = 0;
+  double freqCentsSumSq = 0., ampRelSumSq = 0.;
+  long comparePoints = 0;
+  size_t searchBegin = 0;
+  for (auto& L : lt)
+  {
+    lorisEnergyTotal += L.energy;
+    while ((searchBegin < mt.size()) && (mt[searchBegin].t0 < L.t0 - startTimeTol))
+    {
+      ++searchBegin;
+    }
+    int best = -1;
+    double bestDf = startFreqTol;
+    for (size_t j = searchBegin; (j < mt.size()) && (mt[j].t0 <= L.t0 + startTimeTol); ++j)
+    {
+      if (mt[j].matched) continue;
+      const double df = fabs(mt[j].f0 - L.f0);
+      if (df < bestDf)
+      {
+        bestDf = df;
+        best = int(j);
+      }
+    }
+    if (best < 0) continue;
+
+    TrackInfo& M = mt[best];
+    M.matched = true;
+    L.matched = true;
+    ++matched;
+    matchedEnergy += L.energy;
+
+    // sample freq/amp over the overlap
+    const double o0 = std::max(L.t0, M.t0), o1 = std::min(L.t1, M.t1);
+    if (o1 <= o0) continue;
+    const Loris::Partial* lp = nullptr;
+    {  // recover the loris partial by index
+      long k = 0;
+      for (const Loris::Partial& p : lorisPartials)
+      {
+        if (k++ == L.index)
+        {
+          lp = &p;
+          break;
+        }
+      }
+    }
+    const ml::VutuPartial& mp = result->partials[M.index];
+    const int kPoints = 9;
+    for (int k = 1; k < kPoints - 1; ++k)
+    {
+      const double t = o0 + (o1 - o0) * k / (kPoints - 1);
+      double mf, ma;
+      utuPartialAt(mp, t, mf, ma);
+      const double lf = lp->frequencyAt(t);
+      const double la = lp->amplitudeAt(t);
+      if ((lf > 0.) && (mf > 0.))
+      {
+        const double cents = 1200. * log2(mf / lf);
+        freqCentsSumSq += cents * cents;
+        ++comparePoints;
+        if (la > 1e-7)
+        {
+          const double rel = (ma - la) / la;
+          ampRelSumSq += rel * rel;
+        }
+      }
+    }
+  }
+
+  const double countDrift =
+      fabs(double(long(mt.size()) - long(lt.size()))) / std::max(size_t(1), lt.size());
+  const double energyFrac = matchedEnergy / std::max(1e-12, lorisEnergyTotal);
+  const double freqRmsCents = sqrt(freqCentsSumSq / std::max(1L, comparePoints));
+  const double ampRms = sqrt(ampRelSumSq / std::max(1L, comparePoints));
+
+  printf("  partials: %zu loris, %zu new (drift %.3g%%)\n", lt.size(), mt.size(),
+         100. * countDrift);
+  printf("  matched tracks: %ld (%.4g%% of loris energy)\n", matched, 100. * energyFrac);
+  printf("  freq RMS %.3g cents, amp env RMS rel %.3g (%ld points)\n", freqRmsCents, ampRms,
+         comparePoints);
+
+  const bool pass = (countDrift < 0.05) && (energyFrac > 0.95) && (freqRmsCents < 10.);
+  printf("analyze-test: %s\n", pass ? "PASS" : "FAIL");
+  return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -528,7 +729,8 @@ int main(int argc, char** argv)
         "  window-test            Kaiser windows vs Loris\n"
         "  spectrum-test <aiff>   reassigned spectrum vs Loris\n"
         "  peaks-test <aiff>      peak selection + thinning vs Loris\n"
-        "  bandwidth-test <aiff>  peaks + residue bandwidth association vs Loris\n");
+        "  bandwidth-test <aiff>  peaks + residue bandwidth association vs Loris\n"
+        "  analyze-test <aiff>    full analysis + phase fix vs Loris::Analyzer\n");
     return 2;
   }
   const std::string cmd(argv[1]);
@@ -537,6 +739,7 @@ int main(int argc, char** argv)
   if (cmd == "spectrum-test" && argc > 2) return spectrumTest(argv[2]);
   if (cmd == "peaks-test" && argc > 2) return peaksTest(argv[2], false);
   if (cmd == "bandwidth-test" && argc > 2) return peaksTest(argv[2], true);
+  if (cmd == "analyze-test" && argc > 2) return analyzeTest(argv[2]);
   printf("unknown command '%s'\n", cmd.c_str());
   return 2;
 }
