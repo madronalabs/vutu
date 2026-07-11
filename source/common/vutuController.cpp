@@ -19,49 +19,11 @@
 #include "mlvg.h"
 //#include "miniz.h"
 
-// Loris includes
-#include "loris.h"
-#include "PartialList.h"
-#include "Synthesizer.h"
+// vutu analysis library, replacing Loris
+#include "utuAnalyzer.h"
+#include "utuSynth.h"
 
 using namespace ml;
-
-void _lorisToVutuPartials(const Loris::PartialList* pLoris, VutuPartialsData* pSumu)
-{
-  pSumu->partials.clear();
-  for (const auto& partial : *pLoris) {
-    VutuPartial sp;
-    for (auto it = partial.begin(); it != partial.end(); it++) {
-      sp.time.push_back(it.time());
-      sp.freq.push_back(it->frequency());
-      sp.amp.push_back(it->amplitude());
-      sp.bandwidth.push_back(it->bandwidth());
-      sp.phase.push_back(it->phase());
-    }
-    pSumu->partials.push_back(sp);
-  }
-  
-  pSumu->type = Symbol(kVutuPartialsFileType);
-  pSumu->version = kVutuPartialsFileVersion;
-}
-
-void _sumuToLorisPartials(const VutuPartialsData* pSumu, Loris::PartialList* pLoris)
-{
-  pLoris->clear();
-    
-  for (auto it = pSumu->partials.begin(); it != pSumu->partials.end(); it++) {
-    const VutuPartial& sp = *it;
-    Loris::Partial lp;
-
-    size_t nBreakpoints = sp.time.size();
-    for(int i=0; i<nBreakpoints; ++i)
-    {
-      Loris::Breakpoint b(sp.freq[i], sp.amp[i], sp.bandwidth[i], sp.phase[i]);
-      lp.insert(sp.time[i], b);
-    }
-    pLoris->push_back(lp);
-  }
-}
 
 //-----------------------------------------------------------------------------
 // VutuController implementation
@@ -84,8 +46,7 @@ void VutuController::setButtonEnableStates()
   sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", usable(&_sourceSample)});
   sendMessageToActor(_viewName, {"widget/analyze/set_prop/enabled", usable(&_sourceSample)});
   
-  Loris::PartialList* pLorisPartials = _lorisPartials.get();
-  bool partialsOK = pLorisPartials && (pLorisPartials->size() > 0);
+  bool partialsOK = _vutuPartials && (_vutuPartials->partials.size() > 0);
   sendMessageToActor(_viewName, {"widget/synthesize/set_prop/enabled", partialsOK});
   sendMessageToActor(_viewName, {"widget/export/set_prop/enabled", partialsOK});
   
@@ -118,7 +79,6 @@ void VutuController::_clearPartialsData()
 {
   // clear data
   _vutuPartials = std::make_unique< VutuPartialsData >();
-  _lorisPartials = std::make_unique< Loris::PartialList >();
 }
 
 void VutuController::broadcastPartialsData()
@@ -371,31 +331,31 @@ int VutuController::analyzeSample()
   int framesInInterval = frameInterval.mX2 - frameInterval.mX1;
   const float kFadeTime = 0.001f;
   int fadeSamples = kFadeTime*_sourceSample.sampleRate;
-  
-  // make double-precision version of input
-  std::vector< double > vx;
+
+  // make a faded copy of the analysis interval
+  std::vector< float > vx;
   vx.resize(framesInInterval);
   int srcStart = frameInterval.mX1;
   for(int i=0; i<framesInInterval; ++i)
   {
     vx[i] = _sourceSample[srcStart + i];
   }
-  
+
   // fade in
   for(int i=0; i<fadeSamples; ++i)
   {
-    double gain = (double)i / (double)fadeSamples;
+    float gain = (float)i / (float)fadeSamples;
     vx[i] *= gain;
   }
-  
+
   // fade out
   for(int i=0; i<fadeSamples; ++i)
   {
     int i2 = framesInInterval - 1 - i;
-    double gain = (double)i / (double)fadeSamples;
+    float gain = (float)i / (float)fadeSamples;
     vx[i2] *= gain;
   }
-  
+
   // set sample rate and configure analyzer
   int sr = _sourceSample.sampleRate;
   auto res = params.getRealFloatValue("resolution");
@@ -405,69 +365,31 @@ int VutuController::analyzeSample()
   auto loCut = params.getRealFloatValue("lo_cut");
   auto hiCut = params.getRealFloatValue("hi_cut");
   auto noiseWidth = params.getRealFloatValue("noise_width");
-  analyzer_configure(res, width);
-  analyzer_setFreqDrift(drift);
-  analyzer_setAmpFloor(floor);
-  analyzer_setFreqFloor(loCut);
-  analyzer_setBwRegionWidth(noiseWidth);
-    
-  // make new partial list and give ownership to _lorisPartials
-  Loris::PartialList* newPartials = createPartialList();
-  _lorisPartials = std::make_unique< Loris::PartialList >(*newPartials);
-  
-  
-  //  if verbose, spew out the Analyzer state:
-  if ( true )
-  {
-    std::cout << "* Loris Analyzer configuration:" << std::endl;
-    std::cout << "*\tfrequency resolution: " << analyzer_getFreqResolution() << " Hz\n";
-    std::cout << "*\tanalysis window width: " << analyzer_getWindowWidth() << " Hz\n";
-    std::cout << "*\tanalysis window sidelobe attenuation: "
-    << analyzer_getSidelobeLevel() << " dB\n";
-    std::cout << "*\tspectral amplitude floor: " << analyzer_getAmpFloor() << " dB\n";
-    std::cout << "*\tminimum partial frequecy: " << analyzer_getFreqFloor() << " Hz\n";
-    std::cout << "*\thop time: " << 1000*analyzer_getHopTime() << " ms\n";
-    std::cout << "*\tmaximum partial frequency drift: " << analyzer_getFreqDrift()
-    << " Hz\n";
-    std::cout << "*\tcrop time: " << 1000*analyzer_getCropTime() << " ms\n";
-    
-    if (1)//( gAnalyzer->associateBandwidth() )
-    {
-      if (1)// ( gAnalyzer->bandwidthIsResidue() )
-      {
-        std::cout << "*\tspectral residue bandwidth association region width: "
-        << analyzer_getBwRegionWidth() << " Hz\n";
-      }
-      else
-      {
-        std::cout << "*\tsinusoidal convergence bandwidth tolerance: "
-        << analyzer_getBwConvergenceTolerance() << "\n";
-      }
-    }
-    else
-    {
-      std::cout << "*\tstoring no bandwidth\n";
-    }
 
-    
-    std::cout << std::endl;
-  }
-  
-  analyze( vx.data(), framesInInterval, sr, _lorisPartials.get() );
-  
-  if(partialList_size(_lorisPartials.get()) > 0)
+  utu::AnalyzerParams analyzerParams;
+  analyzerParams.sampleRate = sr;
+  analyzerParams.resolution = res;
+  analyzerParams.windowWidth = width;
+  analyzerParams.freqDrift = drift;
+  analyzerParams.ampFloor = floor;
+  analyzerParams.freqFloor = loCut;
+  analyzerParams.bwRegionWidth = noiseWidth;
+
+  auto newPartials = utu::analyzeToPartials(vx.data(), framesInInterval, analyzerParams);
+
+  if(newPartials && (newPartials->partials.size() > 0))
   {
     status = true;
-    
-    // convert loris partials to Sumu format and calculate stats
-    _vutuPartials = std::make_unique< VutuPartialsData >();
-    _lorisToVutuPartials(_lorisPartials.get(), _vutuPartials.get());
+
+    _vutuPartials = std::move(newPartials);
     cutHighs(*_vutuPartials, hiCut);
     cleanOutliers(*_vutuPartials);
     calcStats(*_vutuPartials);
     showAnalysisInfo();
-    
+
     // store analysis params used
+    _vutuPartials->type = Symbol(kVutuPartialsFileType);
+    _vutuPartials->version = kVutuPartialsFileVersion;
     _vutuPartials->sourceFile = sourceFileLoaded.getShortName();
     _vutuPartials->sourceDuration = getDuration(_sourceSample);
     _vutuPartials->resolution = res;
@@ -476,36 +398,32 @@ int VutuController::analyzeSample()
     _vutuPartials->freqDrift = drift;
     _vutuPartials->loCut = loCut;
     _vutuPartials->hiCut = hiCut;
-
-
-    // convert back to loris partials after cutHighs (hack-ish)
-    _sumuToLorisPartials(_vutuPartials.get(), _lorisPartials.get());
-    
   }
   return status;
 }
 
-// generate the synthesized audio from the Loris partials.
+// generate the synthesized audio from the partials.
 // note output sample may be a different sample rate!
 void VutuController::synthesize()
 {
-  if(!_lorisPartials.get()) return;
+  if(!_vutuPartials.get()) return;
 
-  std::vector<double> destSamples;
-  Loris::Synthesizer::Parameters synthParams;
-  synthParams.sampleRate = kSampleRate;
+  std::vector<float> destSamples;
   const float kFadeTime = 0.001f;
 
   // get frames in analysis interval to use for output length. Length of synthesis will be shorter.
   Interval analysisInterval = params.getRealValue("analysis_interval").getIntervalValue();
   float duration = _vutuPartials->sourceDuration*(analysisInterval.mX2 -  analysisInterval.mX1);
-  int framesAnalyzed = duration*synthParams.sampleRate;
-  
-  // run the Loris synthesizer
-  Loris::Synthesizer synth(synthParams, destSamples);
-  synth.setFadeTime(kFadeTime);
-  synth.synthesize(_lorisPartials->begin(), _lorisPartials->end());
-  
+  int framesAnalyzed = duration*kSampleRate;
+
+  // run the synthesizer
+  utu::SynthParams synthParams;
+  synthParams.sampleRate = kSampleRate;
+  synthParams.fadeTime = kFadeTime;
+  utu::PartialSynthesizer synth;
+  synth.setParams(synthParams);
+  synth.render(*_vutuPartials, destSamples);
+
   std::cout << "VutuController: synthesize: " << destSamples.size() << "samples synthesized. " << framesAnalyzed << " frames analyzed. \n";
 
   // resize and zero-pad output to fill entire interval
@@ -669,8 +587,7 @@ void VutuController::onMessage(Message m)
         case(hash("synthesize")):
         {
           _clearSynthesizedSample();
-          Loris::PartialList* pLorisPartials = _lorisPartials.get();
-          if(pLorisPartials && pLorisPartials->size() > 0)
+          if(_vutuPartials && (_vutuPartials->partials.size() > 0))
           {
             synthesize();
           }
@@ -763,10 +680,6 @@ void VutuController::onMessage(Message m)
             // load Sumu partials from JSON
             if(loadPartialsFromPath(loadPath))
             {
-              // convert to Loris partials so we can use Loris to synthesize output
-              _lorisPartials = std::make_unique< Loris::PartialList >();
-              _sumuToLorisPartials(_vutuPartials.get(), _lorisPartials.get() );
-              
               // clear source sample so all data is consistent
               clear(_sourceSample);
               broadcastSourceSample();

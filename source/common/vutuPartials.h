@@ -573,7 +573,7 @@ inline VutuPartialsData* loadVutuPartialsFromFile(const File& fileToLoad)
   {
     if(newPartials->sourceDuration == 0.0f)
     {
-      std::cout << "No duration found! using partials range " << newPartials->stats.timeRange << "\n";
+      //std::cout << "No duration found! using partials range " << newPartials->stats.timeRange << "\n";
       newPartials->sourceDuration = newPartials->stats.timeRange.x2;
     }
   }

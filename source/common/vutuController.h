@@ -17,8 +17,6 @@
 
 #include "sndfile.hh"
 
-#include "loris.h"
-
 using namespace ml;
 
 
@@ -45,7 +43,6 @@ private:
   ml::Sample _sourceSample;
   ml::Sample _synthesizedSample;
 
-  std::unique_ptr< Loris::PartialList > _lorisPartials;
   std::unique_ptr< VutuPartialsData > _vutuPartials;
 
   int saveSampleToWavFile(const ml::Sample& signal, Path wavPath);

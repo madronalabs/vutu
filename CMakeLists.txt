@@ -72,25 +72,20 @@ message("madronalib headers should be in: " ${MADRONALIB_INCLUDE_DIR} )
 message("madronalib library should be at: " ${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME} )
 
 #--------------------------------------------------------------------
-# find loris library
+# find manzanita library
 #--------------------------------------------------------------------
 
 if(APPLE)
-    set (LORIS_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/loris")
-    set (LORIS_CPP_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
-    set (LORIS_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
+  set (MANZANITA_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/manzanita")
+  set (MANZANITA_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
 elseif(WIN32)
-    set (LORIS_INCLUDE_DIR "C:/Program Files/loris/include")
-    set (LORIS_CPP_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../loris/src")
-    set (LORIS_LIBRARY_DIR "C:/Program Files/loris/lib")
+  set (MANZANITA_INCLUDE_DIR "C:/Program Files/manzanita/include")
+  set (MANZANITA_LIBRARY_DIR "C:/Program Files/manzanita/lib")
 else()
 endif()
 
-# add -debug suffix to link debug loris for debug builds
-set(loris_NAME loris$<$<CONFIG:Debug>:-debug>)
-
-message("loris headers should be in: " ${LORIS_INCLUDE_DIR} )
-message("loris library should be at: " ${LORIS_LIBRARY_DIR}/${loris_NAME} )
+# add -debug suffix to link debug manzanita for debug builds
+set(manzanita_NAME manzanita$<$<CONFIG:Debug>:-debug>)
 
 #--------------------------------------------------------------------
 # find mlvg library
@@ -206,8 +201,11 @@ file(GLOB COMMON_INCLUDES "${CMAKE_SOURCE_DIR}/source/common/*.h")
 file(GLOB WIDGETS_SOURCES "${CMAKE_SOURCE_DIR}/source/widgets/*.cpp")
 file(GLOB WIDGETS_INCLUDES "${CMAKE_SOURCE_DIR}/source/widgets/*.h")
 
-list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} )
-list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} )
+file(GLOB ANALYSIS_SOURCES "${CMAKE_SOURCE_DIR}/source/analysis/*.cpp")
+file(GLOB ANALYSIS_INCLUDES "${CMAKE_SOURCE_DIR}/source/analysis/*.h")
+
+list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} ${ANALYSIS_SOURCES} )
+list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} ${ANALYSIS_INCLUDES} )
 
 if(APPLE)
 elseif(WIN32)
@@ -250,12 +248,13 @@ target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2main.lib")
 
 # add include dirs
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source" )
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/analysis" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/common" )
+target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/sumu" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/utu" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/external/libresample/include" )
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
-target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/../loris/src" )
 
 
 # add madronalib library
@@ -266,12 +265,12 @@ elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
 endif()
 
-# add loris library
-target_include_directories(${target} PRIVATE ${LORIS_INCLUDE_DIR})
+# add manzanita library
+target_include_directories(${target} PRIVATE ${MANZANITA_INCLUDE_DIR})
 if(APPLE)
-    target_link_libraries(${target} PRIVATE "${LORIS_LIBRARY_DIR}/lib${loris_NAME}.a")   
+    target_link_libraries(${target} PRIVATE "${MANZANITA_LIBRARY_DIR}/lib${manzanita_NAME}.a")
 elseif(WIN32)
-    target_link_libraries(${target} PRIVATE "${LORIS_LIBRARY_DIR}/${loris_NAME}.lib")
+    target_link_libraries(${target} PRIVATE "${MANZANITA_LIBRARY_DIR}/${manzanita_NAME}.lib")
 endif()
 
 # add mlvg library

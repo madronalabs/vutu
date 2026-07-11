@@ -13,11 +13,6 @@
 
 #include "libresample.h"
 
-// Loris includes
-#include "loris.h"
-#include "PartialList.h"
-#include "Synthesizer.h"
-
 using namespace ml;
 
 constexpr float kSizeLo = 0, kSizeHi = 40;
@@ -374,21 +369,6 @@ void VutuProcessor::onMessage(Message msg)
           break;
         }
           
-        case(hash("set_loris_partials_data")):
-        {
-          playbackState = "off";
-          sendMessageToActor(_controllerName, Message{"do/playback_stopped"});
-          
-          // get pointer from message
-          Loris::PartialList* pPartials = *reinterpret_cast<Loris::PartialList**>(msg.value.getBlobValue());
-          _pLorisPartials = *reinterpret_cast<Loris::PartialList**>(msg.value.getBlobValue());
-          
-
- //         std::cout << "VutuProcessor: got new loris partials: n = " << _pLorisPartials->size() << "\n";
-
-          break;
-        }
-
         case(hash("set_synth_data")):
         {
           playbackState = "off";

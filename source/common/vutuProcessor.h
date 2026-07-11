@@ -15,8 +15,6 @@
 #include "MLMath2D.h"
 #include "MLDSPSample.h"
 
-#include "loris.h"
-
 using namespace ml;
 
 constexpr int kInputChannels = 0;
@@ -57,9 +55,6 @@ private:
   ml::Sample* _pSourceSampleInController{nullptr};
   ml::Sample _sourceSample;
   ml::Sample* _pSynthesizedSample{nullptr};
-
-
-  Loris::PartialList* _pLorisPartials{ nullptr };
 
   void togglePlaybackState(Symbol whichSample);
 
