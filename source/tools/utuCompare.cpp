@@ -17,10 +17,13 @@
 #include "utuSpectrum.h"
 #include "utuWindow.h"
 
+#include "utuPeaks.h"
+
 // old Loris, reference engine
 #include "AiffFile.h"
 #include "KaiserWindow.h"
 #include "ReassignedSpectrum.h"
+#include "SpectralPeakSelector.h"
 
 namespace
 {
@@ -306,6 +309,167 @@ int spectrumTest(const char* path)
   return pass ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// peaks-test: peak selection + thinning vs Loris (M4)
+
+// literal copy of Loris Analyzer::thinPeaks (private there), on Loris peaks
+Loris::Peaks::iterator lorisThinPeaks(Loris::Peaks& peaks, double frameTime, double ampFloordB,
+                                      double freqResolution)
+{
+  const double fadeRangedB = 10.0;
+  const double threshold = std::pow(10., 0.05 * ampFloordB);
+  const double beginFade = std::pow(10., 0.05 * (ampFloordB + fadeRangedB));
+
+  std::sort(peaks.begin(), peaks.end(), Loris::SpectralPeak::sort_greater_amplitude);
+
+  peaks.erase(std::remove_if(peaks.begin(), peaks.end(),
+                             [frameTime](const Loris::SpectralPeak& v)
+                             { return 0 > (v.time() + frameTime); }),
+              peaks.end());
+
+  auto it = peaks.begin();
+  auto beginRejected = it;
+  while (it != peaks.end())
+  {
+    Loris::SpectralPeak& pk = *it;
+    const double lower = pk.frequency() - freqResolution;
+    const double upper = pk.frequency() + freqResolution;
+    const bool masked =
+        beginRejected != std::find_if(peaks.begin(), beginRejected,
+                                      [lower, upper](const Loris::SpectralPeak& v) {
+                                        return (v.frequency() > lower) &&
+                                               (v.frequency() < upper);
+                                      });
+    if (pk.amplitude() > threshold && !masked)
+    {
+      if (pk.amplitude() < beginFade)
+      {
+        double alpha = (beginFade - pk.amplitude()) / (beginFade - threshold);
+        pk.setAmplitude(pk.amplitude() * (1. - alpha));
+      }
+      if (it != beginRejected)
+      {
+        std::swap(*it, *beginRejected);
+      }
+      ++beginRejected;
+    }
+    ++it;
+  }
+  return beginRejected;
+}
+
+int peaksTest(const char* path)
+{
+  Loris::AiffFile file(path);
+  const double sr = file.sampleRate();
+  std::vector<double>& samplesD = file.samples();
+  const long nSamples = long(samplesD.size());
+  std::vector<float> samplesF(samplesD.begin(), samplesD.end());
+
+  const double resolutionHz = 80.;
+  const double widthHz = 160.;
+  const double sidelobeDb = 90.;
+  const double ampFloorDb = -90.;
+  const double freqFloorHz = resolutionHz;  // Loris default: freqFloor = resolution
+
+  const double shape = Loris::KaiserWindow::computeShape(sidelobeDb);
+  long winlen = long(Loris::KaiserWindow::computeLength(widthHz / sr, shape));
+  if (!(winlen % 2)) ++winlen;
+  std::vector<double> win(winlen), winDeriv(winlen);
+  Loris::KaiserWindow::buildWindow(win, shape);
+  Loris::KaiserWindow::buildTimeDerivativeWindow(winDeriv, shape);
+  Loris::ReassignedSpectrum lorisSpectrum(win, winDeriv);
+
+  const double hopTime = 1. / widthHz;
+  const double cropTime = hopTime;
+  Loris::SpectralPeakSelector lorisSelector(sr, cropTime);
+
+  ml::utu::ReassignedSpectrum spectrum;
+  spectrum.configure(ml::utu::buildReassignmentWindows(sr, widthHz, sidelobeDb));
+  ml::utu::PeakSelector selector;
+  selector.configure(float(sr), float(cropTime));
+
+  const long hopSamples = long(hopTime * sr);
+  const long half = winlen / 2;
+  const double* bufBegin = samplesD.data();
+  const double* bufEnd = bufBegin + nSamples;
+
+  long frames = 0;
+  long lorisKeptTotal = 0, keptTotal = 0, matchedTotal = 0;
+  long lorisRejTotal = 0, rejTotal = 0;
+  double maxFreqErr = 0., maxAmpRelErr = 0., maxPhaseErr = 0., maxTimeErr = 0.;
+  ml::utu::PeakFrame frame;
+
+  for (long center = 0; center < nSamples; center += hopSamples, ++frames)
+  {
+    const double frameTime = double(center) / sr;
+
+    const double* winMiddle = bufBegin + center;
+    lorisSpectrum.transform(std::max(winMiddle - half, bufBegin), winMiddle,
+                            std::min(winMiddle + half + 1, bufEnd));
+    Loris::Peaks lorisPeaks = lorisSelector.selectPeaks(lorisSpectrum, freqFloorHz);
+    auto lorisRejected = lorisThinPeaks(lorisPeaks, frameTime, ampFloorDb, resolutionHz);
+    const long lorisKept = long(lorisRejected - lorisPeaks.begin());
+
+    spectrum.transform(samplesF.data(), nSamples, center);
+    selector.selectPeaks(spectrum, float(freqFloorHz), frame);
+    ml::utu::thinPeaks(frame, float(resolutionHz), float(ampFloorDb), frameTime);
+
+    lorisKeptTotal += lorisKept;
+    keptTotal += long(frame.numKept);
+    lorisRejTotal += long(lorisPeaks.size()) - lorisKept;
+    rejTotal += long(frame.peaks.size() - frame.numKept);
+
+    // match kept sets by frequency, greedy two-pointer over freq-sorted lists
+    std::vector<const Loris::SpectralPeak*> lk;
+    for (long i = 0; i < lorisKept; ++i) lk.push_back(&lorisPeaks[i]);
+    std::sort(lk.begin(), lk.end(),
+              [](auto* a, auto* b) { return a->frequency() < b->frequency(); });
+    std::vector<const ml::utu::Peak*> mk;
+    for (size_t i = 0; i < frame.numKept; ++i) mk.push_back(&frame.peaks[i]);
+    std::sort(mk.begin(), mk.end(), [](auto* a, auto* b) { return a->freq < b->freq; });
+
+    const double matchTolHz = 0.5;
+    size_t a = 0, b = 0;
+    while (a < lk.size() && b < mk.size())
+    {
+      const double fa = lk[a]->frequency();
+      const double fb = mk[b]->freq;
+      if (fabs(fa - fb) < matchTolHz)
+      {
+        ++matchedTotal;
+        maxFreqErr = std::max(maxFreqErr, fabs(fa - fb));
+        maxAmpRelErr = std::max(
+            maxAmpRelErr, fabs(mk[b]->amp - lk[a]->amplitude()) / lk[a]->amplitude());
+        maxTimeErr = std::max(maxTimeErr, fabs(mk[b]->timeOffset - lk[a]->time()));
+        double dp = remainder(mk[b]->phase - lk[a]->createBreakpoint().phase(), 2. * kPi);
+        maxPhaseErr = std::max(maxPhaseErr, fabs(dp));
+        ++a;
+        ++b;
+      }
+      else if (fa < fb)
+        ++a;
+      else
+        ++b;
+    }
+  }
+
+  const double keptDrift =
+      fabs(double(keptTotal - lorisKeptTotal)) / std::max(1L, lorisKeptTotal);
+  const double unmatched = 1. - double(matchedTotal) / std::max(1L, lorisKeptTotal);
+  printf("%ld frames\n", frames);
+  printf("  kept peaks:     %ld loris, %ld new (drift %.3g%%)\n", lorisKeptTotal, keptTotal,
+         100. * keptDrift);
+  printf("  rejected peaks: %ld loris, %ld new\n", lorisRejTotal, rejTotal);
+  printf("  matched: %ld (unmatched %.3g%%)\n", matchedTotal, 100. * unmatched);
+  printf("  max matched err: freq %.3g Hz, amp rel %.3g, time %.3g s, phase %.3g rad\n",
+         maxFreqErr, maxAmpRelErr, maxTimeErr, maxPhaseErr);
+
+  const bool pass = (keptDrift < 0.02) && (unmatched < 0.02);
+  printf("peaks-test: %s\n", pass ? "PASS" : "FAIL");
+  return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -316,13 +480,15 @@ int main(int argc, char** argv)
         "usage: utucompare <command>\n"
         "  fft-test               RealFFT vs naive DFT\n"
         "  window-test            Kaiser windows vs Loris\n"
-        "  spectrum-test <aiff>   reassigned spectrum vs Loris\n");
+        "  spectrum-test <aiff>   reassigned spectrum vs Loris\n"
+        "  peaks-test <aiff>      peak selection + thinning vs Loris\n");
     return 2;
   }
   const std::string cmd(argv[1]);
   if (cmd == "fft-test") return fftTest();
   if (cmd == "window-test") return windowTest();
   if (cmd == "spectrum-test" && argc > 2) return spectrumTest(argv[2]);
+  if (cmd == "peaks-test" && argc > 2) return peaksTest(argv[2]);
   printf("unknown command '%s'\n", cmd.c_str());
   return 2;
 }
