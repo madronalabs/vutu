@@ -20,6 +20,7 @@
 #include "utuAnalyzer.h"
 #include "utuBandwidth.h"
 #include "utuPeaks.h"
+#include "utuSynth.h"
 
 // old Loris, reference engine
 #include "AiffFile.h"
@@ -30,6 +31,7 @@
 #include "PartialList.h"
 #include "ReassignedSpectrum.h"
 #include "SpectralPeakSelector.h"
+#include "Synthesizer.h"
 
 namespace
 {
@@ -717,6 +719,216 @@ int analyzeTest(const char* path)
   return pass ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// synth-test: bandwidth-enhanced rendering vs Loris::Synthesizer (M8)
+
+// vutu partials -> Loris PartialList, as vutu's old _sumuToLorisPartials
+Loris::PartialList vutuToLorisPartials(const ml::VutuPartialsData& d)
+{
+  Loris::PartialList list;
+  for (const ml::VutuPartial& sp : d.partials)
+  {
+    Loris::Partial lp;
+    for (size_t i = 0; i < sp.time.size(); ++i)
+    {
+      Loris::Breakpoint b(sp.freq[i], sp.amp[i], sp.bandwidth[i], sp.phase[i]);
+      lp.insert(sp.time[i], b);
+    }
+    list.push_back(lp);
+  }
+  return list;
+}
+
+double rmsOf(const float* x, long n)
+{
+  double s = 0.;
+  for (long i = 0; i < n; ++i) s += double(x[i]) * x[i];
+  return sqrt(s / std::max(1L, n));
+}
+double rmsOfD(const double* x, long n)
+{
+  double s = 0.;
+  for (long i = 0; i < n; ++i) s += x[i] * x[i];
+  return sqrt(s / std::max(1L, n));
+}
+
+// one constant partial, breakpoints every 10 ms
+ml::VutuPartialsData makeTestPartial(double freq, double amp, double bw, double dur)
+{
+  ml::VutuPartialsData d;
+  ml::VutuPartial p;
+  for (double t = 0.; t <= dur; t += 0.01)
+  {
+    p.time.push_back(float(t));
+    p.freq.push_back(float(freq));
+    p.amp.push_back(float(amp));
+    p.bandwidth.push_back(float(bw));
+    p.phase.push_back(0.f);
+  }
+  d.partials.push_back(p);
+  return d;
+}
+
+void renderBoth(const ml::VutuPartialsData& d, double sr, double fade,
+                std::vector<double>& lorisOut, std::vector<float>& newOut)
+{
+  Loris::PartialList lp = vutuToLorisPartials(d);
+  lorisOut.clear();
+  Loris::Synthesizer lorisSynth(sr, lorisOut, fade);
+  for (const Loris::Partial& p : lp) lorisSynth.synthesize(p);
+
+  ml::utu::SynthParams sp;
+  sp.sampleRate = float(sr);
+  sp.fadeTime = float(fade);
+  ml::utu::PartialSynthesizer synth;
+  synth.setParams(sp);
+  synth.render(d, newOut);
+}
+
+int synthTest(const char* path)
+{
+  const double sr = 48000.;
+  const double fade = 0.001;
+  std::vector<double> lorisOut;
+  std::vector<float> newOut;
+
+  // pure sine (bw 0): engines should nearly null
+  {
+    auto d = makeTestPartial(440., 0.5, 0., 2.);
+    renderBoth(d, sr, fade, lorisOut, newOut);
+    const long n = std::min(lorisOut.size(), newOut.size());
+    double maxDiff = 0.;
+    for (long i = 0; i < n; ++i)
+    {
+      maxDiff = std::max(maxDiff, fabs(lorisOut[i] - newOut[i]));
+    }
+    printf("sine bw=0:  loris RMS %.4f, new RMS %.4f, max sample diff %.3g\n",
+           rmsOfD(lorisOut.data(), n), rmsOf(newOut.data(), n), maxDiff);
+    if (maxDiff > 1e-3)
+    {
+      printf("synth-test: FAIL (sine mismatch)\n");
+      return 1;
+    }
+  }
+
+  // full-bandwidth noise: RMS should match after modulator calibration
+  double noiseRatio;
+  {
+    auto d = makeTestPartial(440., 0.5, 1., 2.);
+    renderBoth(d, sr, fade, lorisOut, newOut);
+    const long n = std::min(lorisOut.size(), newOut.size());
+    const long skip = n / 4;  // measure the steady middle
+    const double lr = rmsOfD(lorisOut.data() + skip, n / 2);
+    const double nr = rmsOf(newOut.data() + skip, n / 2);
+    noiseRatio = lr / std::max(1e-12, nr);
+    printf("noise bw=1: loris RMS %.4f, new RMS %.4f (gain ratio %.4f)\n", lr, nr, noiseRatio);
+  }
+
+  // half bandwidth sanity
+  {
+    auto d = makeTestPartial(440., 0.5, 0.5, 2.);
+    renderBoth(d, sr, fade, lorisOut, newOut);
+    const long n = std::min(lorisOut.size(), newOut.size());
+    const long skip = n / 4;
+    printf("mixed bw=.5: loris RMS %.4f, new RMS %.4f\n", rmsOfD(lorisOut.data() + skip, n / 2),
+           rmsOf(newOut.data() + skip, n / 2));
+  }
+
+  // full render A/B from a real sound, if given: analyze with the new
+  // engine, render the same partials with both synths, compare coarse RMS
+  // envelopes and write aiffs for listening
+  if (path)
+  {
+    Loris::AiffFile file(path);
+    const double fsr = file.sampleRate();
+    std::vector<double>& samplesD = file.samples();
+    std::vector<float> samplesF(samplesD.begin(), samplesD.end());
+
+    ml::utu::AnalyzerParams params;
+    params.sampleRate = float(fsr);
+    params.resolution = 80.f;
+    params.windowWidth = 160.f;
+    auto partials = ml::utu::analyzeToPartials(samplesF.data(), samplesF.size(), params);
+
+    // (a) deterministic part: render with bandwidth zeroed; the engines
+    // should track each other tightly
+    {
+      ml::VutuPartialsData det = *partials;
+      for (auto& p : det.partials)
+      {
+        std::fill(p.bandwidth.begin(), p.bandwidth.end(), 0.f);
+      }
+      renderBoth(det, fsr, fade, lorisOut, newOut);
+      const long n = long(std::min(lorisOut.size(), newOut.size()));
+      const long win = long(0.05 * fsr);
+      double peak = 0.;
+      for (long i = 0; i < n; ++i) peak = std::max(peak, fabs(lorisOut[i]));
+      double maxEnvRel = 0., sumRel = 0.;
+      long envPoints = 0;
+      for (long i = 0; i + win <= n; i += win)
+      {
+        const double lr = rmsOfD(lorisOut.data() + i, win);
+        const double nr = rmsOf(newOut.data() + i, win);
+        if (lr > 1e-3 * peak)
+        {
+          const double rel = fabs(nr - lr) / lr;
+          maxEnvRel = std::max(maxEnvRel, rel);
+          sumRel += rel;
+          ++envPoints;
+        }
+      }
+      printf("%s bw=0: envelope rel diff mean %.3g max %.3g (%ld windows)\n", path,
+             sumRel / std::max(1L, envPoints), maxEnvRel, envPoints);
+      if ((maxEnvRel > 0.1) || (sumRel / std::max(1L, envPoints) > 0.01))
+      {
+        printf("synth-test: FAIL (deterministic render mismatch)\n");
+        return 1;
+      }
+    }
+
+    // (b) full render: different noise realizations, so gate loosely on
+    // global RMS and mean envelope difference; judge finally by listening
+    renderBoth(*partials, fsr, fade, lorisOut, newOut);
+    const long n = long(std::min(lorisOut.size(), newOut.size()));
+    const long win = long(0.05 * fsr);
+    double peak = 0.;
+    for (long i = 0; i < n; ++i) peak = std::max(peak, fabs(lorisOut[i]));
+    double maxEnvRel = 0., sumRel = 0.;
+    long envPoints = 0;
+    for (long i = 0; i + win <= n; i += win)
+    {
+      const double lr = rmsOfD(lorisOut.data() + i, win);
+      const double nr = rmsOf(newOut.data() + i, win);
+      if (lr > 1e-3 * peak)
+      {
+        const double rel = fabs(nr - lr) / lr;
+        maxEnvRel = std::max(maxEnvRel, rel);
+        sumRel += rel;
+        ++envPoints;
+      }
+    }
+    const double globalRel =
+        fabs(rmsOf(newOut.data(), n) - rmsOfD(lorisOut.data(), n)) / rmsOfD(lorisOut.data(), n);
+    printf("%s full: global RMS rel diff %.3g, envelope rel diff mean %.3g max %.3g\n", path,
+           globalRel, sumRel / std::max(1L, envPoints), maxEnvRel);
+
+    // write renders for listening
+    std::vector<double> newOutD(newOut.begin(), newOut.end());
+    Loris::AiffFile fL(lorisOut.data(), lorisOut.size(), fsr);
+    fL.write("utucompare-loris-render.aiff");
+    Loris::AiffFile fN(newOutD.data(), newOutD.size(), fsr);
+    fN.write("utucompare-new-render.aiff");
+    printf("wrote utucompare-loris-render.aiff, utucompare-new-render.aiff\n");
+
+    const bool pass = (globalRel < 0.05) && (sumRel / std::max(1L, envPoints)) < 0.15;
+    printf("synth-test: %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+  }
+
+  printf("synth-test: PASS (calibration only)\n");
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -730,7 +942,8 @@ int main(int argc, char** argv)
         "  spectrum-test <aiff>   reassigned spectrum vs Loris\n"
         "  peaks-test <aiff>      peak selection + thinning vs Loris\n"
         "  bandwidth-test <aiff>  peaks + residue bandwidth association vs Loris\n"
-        "  analyze-test <aiff>    full analysis + phase fix vs Loris::Analyzer\n");
+        "  analyze-test <aiff>    full analysis + phase fix vs Loris::Analyzer\n"
+        "  synth-test [aiff]      bandwidth-enhanced synthesis vs Loris::Synthesizer\n");
     return 2;
   }
   const std::string cmd(argv[1]);
@@ -740,6 +953,7 @@ int main(int argc, char** argv)
   if (cmd == "peaks-test" && argc > 2) return peaksTest(argv[2], false);
   if (cmd == "bandwidth-test" && argc > 2) return peaksTest(argv[2], true);
   if (cmd == "analyze-test" && argc > 2) return analyzeTest(argv[2]);
+  if (cmd == "synth-test") return synthTest(argc > 2 ? argv[2] : nullptr);
   printf("unknown command '%s'\n", cmd.c_str());
   return 2;
 }
