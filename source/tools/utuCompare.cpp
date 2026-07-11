@@ -17,10 +17,12 @@
 #include "utuSpectrum.h"
 #include "utuWindow.h"
 
+#include "utuBandwidth.h"
 #include "utuPeaks.h"
 
 // old Loris, reference engine
 #include "AiffFile.h"
+#include "AssociateBandwidth.h"
 #include "KaiserWindow.h"
 #include "ReassignedSpectrum.h"
 #include "SpectralPeakSelector.h"
@@ -358,7 +360,9 @@ Loris::Peaks::iterator lorisThinPeaks(Loris::Peaks& peaks, double frameTime, dou
   return beginRejected;
 }
 
-int peaksTest(const char* path)
+// with withBandwidth, both engines also run residue bandwidth association
+// (M5) and matched-peak bw/adjusted-amp errors are gated
+int peaksTest(const char* path, bool withBandwidth)
 {
   Loris::AiffFile file(path);
   const double sr = file.sampleRate();
@@ -382,12 +386,16 @@ int peaksTest(const char* path)
 
   const double hopTime = 1. / widthHz;
   const double cropTime = hopTime;
+  const double bwRegionWidthHz = 2000.;
   Loris::SpectralPeakSelector lorisSelector(sr, cropTime);
+  Loris::AssociateBandwidth lorisBw(bwRegionWidthHz, sr);
 
   ml::utu::ReassignedSpectrum spectrum;
   spectrum.configure(ml::utu::buildReassignmentWindows(sr, widthHz, sidelobeDb));
   ml::utu::PeakSelector selector;
   selector.configure(float(sr), float(cropTime));
+  ml::utu::AssociateBandwidth bwAssociator;
+  bwAssociator.configure(float(bwRegionWidthHz), float(sr));
 
   const long hopSamples = long(hopTime * sr);
   const long half = winlen / 2;
@@ -397,7 +405,12 @@ int peaksTest(const char* path)
   long frames = 0;
   long lorisKeptTotal = 0, keptTotal = 0, matchedTotal = 0;
   long lorisRejTotal = 0, rejTotal = 0;
-  double maxFreqErr = 0., maxAmpRelErr = 0., maxPhaseErr = 0., maxTimeErr = 0.;
+  double maxFreqErr = 0., maxAmpRelErr = 0., maxPhaseErr = 0., maxTimeErr = 0., maxBwErr = 0.;
+  // a single borderline peak landing on the other side of the kept/rejected
+  // partition shifts the residue energy of its whole region, so bw agreement
+  // is only meaningful on frames where both engines partition identically
+  long partitionDiffFrames = 0;
+  double maxBwErrSamePartition = 0.;
   ml::utu::PeakFrame frame;
 
   for (long center = 0; center < nSamples; center += hopSamples, ++frames)
@@ -415,6 +428,12 @@ int peaksTest(const char* path)
     selector.selectPeaks(spectrum, float(freqFloorHz), frame);
     ml::utu::thinPeaks(frame, float(resolutionHz), float(ampFloorDb), frameTime);
 
+    if (withBandwidth)
+    {
+      lorisBw.associateBandwidth(lorisPeaks.begin(), lorisRejected, lorisPeaks.end());
+      bwAssociator.associateBandwidth(frame);
+    }
+
     lorisKeptTotal += lorisKept;
     keptTotal += long(frame.numKept);
     lorisRejTotal += long(lorisPeaks.size()) - lorisKept;
@@ -431,19 +450,22 @@ int peaksTest(const char* path)
 
     const double matchTolHz = 0.5;
     size_t a = 0, b = 0;
+    long matchedThisFrame = 0;
+    double frameBwErr = 0.;
     while (a < lk.size() && b < mk.size())
     {
       const double fa = lk[a]->frequency();
       const double fb = mk[b]->freq;
       if (fabs(fa - fb) < matchTolHz)
       {
-        ++matchedTotal;
+        ++matchedThisFrame;
         maxFreqErr = std::max(maxFreqErr, fabs(fa - fb));
         maxAmpRelErr = std::max(
             maxAmpRelErr, fabs(mk[b]->amp - lk[a]->amplitude()) / lk[a]->amplitude());
         maxTimeErr = std::max(maxTimeErr, fabs(mk[b]->timeOffset - lk[a]->time()));
         double dp = remainder(mk[b]->phase - lk[a]->createBreakpoint().phase(), 2. * kPi);
         maxPhaseErr = std::max(maxPhaseErr, fabs(dp));
+        frameBwErr = std::max(frameBwErr, fabs(mk[b]->bw - lk[a]->bandwidth()));
         ++a;
         ++b;
       }
@@ -451,6 +473,19 @@ int peaksTest(const char* path)
         ++a;
       else
         ++b;
+    }
+    matchedTotal += matchedThisFrame;
+    maxBwErr = std::max(maxBwErr, frameBwErr);
+    const bool samePartition = (long(frame.numKept) == lorisKept) &&
+                               (frame.peaks.size() == lorisPeaks.size()) &&
+                               (matchedThisFrame == lorisKept);
+    if (samePartition)
+    {
+      maxBwErrSamePartition = std::max(maxBwErrSamePartition, frameBwErr);
+    }
+    else
+    {
+      ++partitionDiffFrames;
     }
   }
 
@@ -464,9 +499,20 @@ int peaksTest(const char* path)
   printf("  matched: %ld (unmatched %.3g%%)\n", matchedTotal, 100. * unmatched);
   printf("  max matched err: freq %.3g Hz, amp rel %.3g, time %.3g s, phase %.3g rad\n",
          maxFreqErr, maxAmpRelErr, maxTimeErr, maxPhaseErr);
+  if (withBandwidth)
+  {
+    printf("  max matched bw err: %.3g overall; %.3g on the %ld/%ld frames with identical"
+           " partitions\n",
+           maxBwErr, maxBwErrSamePartition, frames - partitionDiffFrames, frames);
+  }
 
-  const bool pass = (keptDrift < 0.02) && (unmatched < 0.02);
-  printf("peaks-test: %s\n", pass ? "PASS" : "FAIL");
+  bool pass = (keptDrift < 0.02) && (unmatched < 0.02);
+  if (withBandwidth)
+  {
+    pass = pass && (maxBwErrSamePartition < 0.02) &&
+           (double(partitionDiffFrames) / frames < 0.02);
+  }
+  printf("%s: %s\n", withBandwidth ? "bandwidth-test" : "peaks-test", pass ? "PASS" : "FAIL");
   return pass ? 0 : 1;
 }
 
@@ -481,14 +527,16 @@ int main(int argc, char** argv)
         "  fft-test               RealFFT vs naive DFT\n"
         "  window-test            Kaiser windows vs Loris\n"
         "  spectrum-test <aiff>   reassigned spectrum vs Loris\n"
-        "  peaks-test <aiff>      peak selection + thinning vs Loris\n");
+        "  peaks-test <aiff>      peak selection + thinning vs Loris\n"
+        "  bandwidth-test <aiff>  peaks + residue bandwidth association vs Loris\n");
     return 2;
   }
   const std::string cmd(argv[1]);
   if (cmd == "fft-test") return fftTest();
   if (cmd == "window-test") return windowTest();
   if (cmd == "spectrum-test" && argc > 2) return spectrumTest(argv[2]);
-  if (cmd == "peaks-test" && argc > 2) return peaksTest(argv[2]);
+  if (cmd == "peaks-test" && argc > 2) return peaksTest(argv[2], false);
+  if (cmd == "bandwidth-test" && argc > 2) return peaksTest(argv[2], true);
   printf("unknown command '%s'\n", cmd.c_str());
   return 2;
 }
