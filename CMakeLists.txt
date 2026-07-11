@@ -285,6 +285,33 @@ target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 # add other external libraries
 target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
 
+#--------------------------------------------------------------------
+# utucompare: transition-only test harness comparing the analysis
+# rewrite against the old Loris library. Requires installed libloris
+# and a loris source checkout at ../loris. Delete this option (and
+# source/tools) once the old engine is no longer a useful reference.
+#--------------------------------------------------------------------
+
+option(VUTU_BUILD_TOOLS "build the utucompare test harness (needs old loris)" OFF)
+if(VUTU_BUILD_TOOLS AND APPLE)
+    file(GLOB ANALYSIS_TOOL_SOURCES "${CMAKE_SOURCE_DIR}/source/analysis/*.cpp")
+    add_executable(utucompare "${CMAKE_SOURCE_DIR}/source/tools/utuCompare.cpp"
+                   ${ANALYSIS_TOOL_SOURCES})
+    target_compile_definitions(utucompare PRIVATE
+                   _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1)
+    target_include_directories(utucompare PRIVATE
+                   "${CMAKE_SOURCE_DIR}/source/analysis"
+                   "${CMAKE_SOURCE_DIR}/source/external"
+                   "${CMAKE_SOURCE_DIR}/source/common"
+                   "${CMAKE_SOURCE_DIR}/../loris/src"
+                   ${MADRONALIB_INCLUDE_DIR}
+                   ${MANZANITA_INCLUDE_DIR})
+    target_link_libraries(utucompare PRIVATE
+                   "${CMAKE_INSTALL_FULL_LIBDIR}/libloris.a"
+                   "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a"
+                   "${MANZANITA_LIBRARY_DIR}/lib${manzanita_NAME}.a")
+endif()
+
 
 
 
