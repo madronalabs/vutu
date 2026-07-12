@@ -302,6 +302,9 @@ if(VUTU_BUILD_TOOLS AND APPLE)
                    ${ANALYSIS_TOOL_SOURCES})
     target_compile_definitions(utucompare PRIVATE
                    _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1)
+    # std::filesystem (convert-dir) needs 10.15; this dev tool is not shipped
+    set_target_properties(utucompare PROPERTIES
+                   XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET "10.15")
     target_include_directories(utucompare PRIVATE
                    "${CMAKE_SOURCE_DIR}/source/analysis"
                    "${CMAKE_SOURCE_DIR}/source/external"
@@ -312,7 +315,8 @@ if(VUTU_BUILD_TOOLS AND APPLE)
     target_link_libraries(utucompare PRIVATE
                    "${CMAKE_INSTALL_FULL_LIBDIR}/libloris.a"
                    "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a"
-                   "${MANZANITA_LIBRARY_DIR}/lib${manzanita_NAME}.a")
+                   "${MANZANITA_LIBRARY_DIR}/lib${manzanita_NAME}.a"
+                   SndFile::sndfile)
 endif()
 
 

@@ -6,12 +6,18 @@
 // analysis rewrite. Links the old Loris library as the reference engine.
 // Subcommands are added milestone by milestone.
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <random>
 #include <string>
 #include <vector>
+
+#include "sndfile.hh"
 
 #include "utuFFT.h"
 #include "utuSpectrum.h"
@@ -24,7 +30,6 @@
 #include "utuSynth.h"
 
 // old Loris, reference engine
-#include "AiffFile.h"
 #include "Analyzer.h"
 #include "AssociateBandwidth.h"
 #include "KaiserWindow.h"
@@ -39,10 +44,41 @@ namespace
 
 constexpr double kPi = 3.14159265358979324;
 
-// The installed libloris's AiffFile misparses the 80-bit extended sample
-// rate on this machine (it reports 11332 Hz for every file), so the rate is
-// hardcoded for the test sounds rather than read from the file.
-constexpr double kFileSampleRate = 44100.;
+// sample rate for the synthetic @ test signals
+constexpr double kSyntheticRate = 44100.;
+
+// ---------------------------------------------------------------------------
+// audio file I/O via libsndfile (aiff and wav, correct sample rates —
+// the old Loris AiffFile reader misparses the 80-bit rate on this build)
+
+bool loadAudio(const char* path, std::vector<float>& out, double& sr)
+{
+  SndfileHandle f(path);
+  if (f.error() || (f.frames() <= 0))
+  {
+    printf("could not read %s\n", path);
+    return false;
+  }
+  sr = f.samplerate();
+  const int ch = std::max(1, f.channels());
+  std::vector<float> interleaved(size_t(f.frames()) * ch);
+  const sf_count_t got = f.readf(interleaved.data(), f.frames());
+  out.resize(size_t(std::max<sf_count_t>(0, got)));
+  for (size_t i = 0; i < out.size(); ++i)
+  {
+    float acc = 0.f;
+    for (int c = 0; c < ch; ++c) acc += interleaved[i * ch + c];
+    out[i] = acc / ch;
+  }
+  return !out.empty();
+}
+
+bool writeAudio(const std::string& path, const float* x, size_t n, double sr, int format)
+{
+  SndfileHandle f(path, SFM_WRITE, format, 1, int(sr));
+  if (f.error()) return false;
+  return f.writef(x, sf_count_t(n)) == sf_count_t(n);
+}
 
 // ---------------------------------------------------------------------------
 // fft-test: RealFFT vs naive double-precision DFT
@@ -208,11 +244,11 @@ int windowTest()
 
 int spectrumTest(const char* path)
 {
-  Loris::AiffFile file(path);
-  const double sr = kFileSampleRate;
-  std::vector<double>& samplesD = file.samples();
+  std::vector<float> samplesF;
+  double sr = 0.;
+  if (!loadAudio(path, samplesF, sr)) return 2;
+  std::vector<double> samplesD(samplesF.begin(), samplesF.end());
   const long nSamples = long(samplesD.size());
-  std::vector<float> samplesF(samplesD.begin(), samplesD.end());
   printf("%s: %ld samples at %g Hz\n", path, nSamples, sr);
 
   // vutu-typical analysis setup: resolution 80 Hz, window width 160 Hz
@@ -376,11 +412,11 @@ Loris::Peaks::iterator lorisThinPeaks(Loris::Peaks& peaks, double frameTime, dou
 // (M5) and matched-peak bw/adjusted-amp errors are gated
 int peaksTest(const char* path, bool withBandwidth)
 {
-  Loris::AiffFile file(path);
-  const double sr = kFileSampleRate;
-  std::vector<double>& samplesD = file.samples();
+  std::vector<float> samplesF;
+  double sr = 0.;
+  if (!loadAudio(path, samplesF, sr)) return 2;
+  std::vector<double> samplesD(samplesF.begin(), samplesF.end());
   const long nSamples = long(samplesD.size());
-  std::vector<float> samplesF(samplesD.begin(), samplesD.end());
 
   const double resolutionHz = 80.;
   const double widthHz = 160.;
@@ -564,11 +600,11 @@ void utuPartialAt(const ml::VutuPartial& p, double t, double& freq, double& amp)
 
 int analyzeTest(const char* path)
 {
-  Loris::AiffFile file(path);
-  const double sr = kFileSampleRate;
-  std::vector<double>& samplesD = file.samples();
+  std::vector<float> samplesF;
+  double sr = 0.;
+  if (!loadAudio(path, samplesF, sr)) return 2;
+  std::vector<double> samplesD(samplesF.begin(), samplesF.end());
   const long nSamples = long(samplesD.size());
-  std::vector<float> samplesF(samplesD.begin(), samplesD.end());
   printf("%s: %ld samples at %g Hz\n", path, nSamples, sr);
 
   const double resolutionHz = 80.;
@@ -845,10 +881,9 @@ int synthTest(const char* path)
   // envelopes and write aiffs for listening
   if (path)
   {
-    Loris::AiffFile file(path);
-    const double fsr = kFileSampleRate;
-    std::vector<double>& samplesD = file.samples();
-    std::vector<float> samplesF(samplesD.begin(), samplesD.end());
+    std::vector<float> samplesF;
+    double fsr = 0.;
+    if (!loadAudio(path, samplesF, fsr)) return 2;
 
     ml::utu::AnalyzerParams params;
     params.sampleRate = float(fsr);
@@ -919,11 +954,10 @@ int synthTest(const char* path)
            globalRel, sumRel / std::max(1L, envPoints), maxEnvRel);
 
     // write renders for listening
-    std::vector<double> newOutD(newOut.begin(), newOut.end());
-    Loris::AiffFile fL(lorisOut.data(), lorisOut.size(), fsr);
-    fL.write("utucompare-loris-render.aiff");
-    Loris::AiffFile fN(newOutD.data(), newOutD.size(), fsr);
-    fN.write("utucompare-new-render.aiff");
+    std::vector<float> lorisOutF(lorisOut.begin(), lorisOut.end());
+    const int fmt = SF_FORMAT_AIFF | SF_FORMAT_PCM_24;
+    writeAudio("utucompare-loris-render.aiff", lorisOutF.data(), lorisOutF.size(), fsr, fmt);
+    writeAudio("utucompare-new-render.aiff", newOut.data(), newOut.size(), fsr, fmt);
     printf("wrote utucompare-loris-render.aiff, utucompare-new-render.aiff\n");
 
     const bool pass = (globalRel < 0.05) && (sumRel / std::max(1L, envPoints)) < 0.15;
@@ -992,7 +1026,7 @@ std::vector<Cand> scanForPeaks(const float* freqCorr, const float* timeCorr, lon
 
 int nelsonTest(const char* path)
 {
-  const double sr = kFileSampleRate;
+  double sr = kSyntheticRate;
   std::vector<float> samplesF;
   if (std::string(path) == "@sine")
   {
@@ -1005,9 +1039,7 @@ int nelsonTest(const char* path)
   }
   else
   {
-    Loris::AiffFile file(path);
-    std::vector<double>& samplesD = file.samples();
-    samplesF.assign(samplesD.begin(), samplesD.end());
+    if (!loadAudio(path, samplesF, sr)) return 2;
   }
   const long nSamples = long(samplesF.size());
   printf("%s: %ld samples at %g Hz\n", path, nSamples, sr);
@@ -1318,9 +1350,27 @@ std::vector<float> makeTestSignal(const std::string& name, double sr)
   return x;
 }
 
+void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
+{
+  fprintf(f, "  resolution   %8.1f Hz      windowWidth %8.1f Hz (frame rate %.1f Hz)\n",
+          r.params.resolution, r.params.windowWidth, r.frameRateHz);
+  fprintf(f, "  ampFloor     %8.1f dB      freqDrift   %8.1f Hz\n", r.params.ampFloor,
+          r.params.freqDrift);
+  fprintf(f, "  loCut        %8.1f Hz      hiCut       %8.1f Hz\n", r.params.freqFloor,
+          r.hiCut);
+  fprintf(f, "  noiseWidth   %8.1f Hz      sidelobe    %8.1f dB\n", r.params.bwRegionWidth,
+          r.params.sidelobeLevel);
+  fprintf(f, "  fundamental  %8.1f Hz      confidence  %8.2f\n", r.fundamental,
+          r.pitchConfidence);
+  fprintf(f, "  spacing dom  %8.1f Hz      min spacing %8.1f Hz\n", r.spacingHz,
+          r.minSpacingHz);
+  fprintf(f, "  noise floor  %8.1f dB      active dur  %8.2f s   probe p90 %d\n",
+          r.noiseFloorDb, r.activeDuration, r.probedSimultaneousP90);
+}
+
 int autoTest(const char* path)
 {
-  double sr = kFileSampleRate;
+  double sr = kSyntheticRate;
   std::vector<float> samplesF;
   if (std::string(path) == "@short")
   {
@@ -1346,27 +1396,13 @@ int autoTest(const char* path)
   }
   if (samplesF.empty())
   {
-    Loris::AiffFile file(path);
-    std::vector<double>& samplesD = file.samples();
-    samplesF.assign(samplesD.begin(), samplesD.end());
+    if (!loadAudio(path, samplesF, sr)) return 2;
   }
   printf("%s: %zu samples at %g Hz\n", path, samplesF.size(), sr);
 
   const int budget = 64;
   auto r = ml::utu::computeAnalyzerParams(samplesF.data(), samplesF.size(), float(sr), budget);
-
-  printf("  resolution   %8.1f Hz      windowWidth %8.1f Hz (frame rate %.1f Hz)\n",
-         r.params.resolution, r.params.windowWidth, r.frameRateHz);
-  printf("  ampFloor     %8.1f dB      freqDrift   %8.1f Hz\n", r.params.ampFloor,
-         r.params.freqDrift);
-  printf("  loCut        %8.1f Hz      hiCut       %8.1f Hz\n", r.params.freqFloor, r.hiCut);
-  printf("  noiseWidth   %8.1f Hz      sidelobe    %8.1f dB\n", r.params.bwRegionWidth,
-         r.params.sidelobeLevel);
-  printf("  fundamental  %8.1f Hz      confidence  %8.2f\n", r.fundamental,
-         r.pitchConfidence);
-  printf("  spacing dom  %8.1f Hz      min spacing %8.1f Hz\n", r.spacingHz, r.minSpacingHz);
-  printf("  noise floor  %8.1f dB      active dur  %8.2f s   probe p90 %d\n", r.noiseFloorDb,
-         r.activeDuration, r.probedSimultaneousP90);
+  printAutoParams(stdout, r);
 
   // range invariants
   bool pass = true;
@@ -1412,6 +1448,132 @@ int autoTest(const char* path)
   return pass ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// convert-dir: batch analyze -> resynthesize every audio file in a directory,
+// writing <name>-converted.<ext> beside each source and auto-params.txt with
+// the automatically chosen analysis parameters per file
+
+int convertDir(const char* dirPath, int budget)
+{
+  namespace fs = std::filesystem;
+  const fs::path dir(dirPath);
+  if (!fs::is_directory(dir))
+  {
+    printf("not a directory: %s\n", dirPath);
+    return 2;
+  }
+
+  std::vector<fs::path> files;
+  for (const auto& entry : fs::directory_iterator(dir))
+  {
+    if (!entry.is_regular_file()) continue;
+    std::string ext = entry.path().extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char ch) { return char(std::tolower(ch)); });
+    if ((ext != ".aif") && (ext != ".aiff") && (ext != ".wav")) continue;
+    const std::string stem = entry.path().stem().string();
+    const std::string tag = "-converted";
+    if ((stem.size() >= tag.size()) &&
+        (stem.compare(stem.size() - tag.size(), tag.size(), tag) == 0))
+    {
+      continue;  // output of a previous run
+    }
+    files.push_back(entry.path());
+  }
+  std::sort(files.begin(), files.end());
+  if (files.empty())
+  {
+    printf("no audio files (.aif/.aiff/.wav) in %s\n", dirPath);
+    return 2;
+  }
+
+  const fs::path reportPath = dir / "auto-params.txt";
+  FILE* report = fopen(reportPath.string().c_str(), "w");
+  if (!report)
+  {
+    printf("cannot write %s\n", reportPath.string().c_str());
+    return 2;
+  }
+  fprintf(report, "automatic analysis parameters (utucompare convert-dir, budget %d)\n",
+          budget);
+
+  int failures = 0;
+  for (const fs::path& path : files)
+  {
+    const std::string name = path.filename().string();
+    printf("converting %s...\n", name.c_str());
+    fprintf(report, "\n%s\n", name.c_str());
+
+    std::vector<float> x;
+    double sr = 0.;
+    if (!loadAudio(path.string().c_str(), x, sr))
+    {
+      fprintf(report, "  ERROR: could not read\n");
+      ++failures;
+      continue;
+    }
+    fprintf(report, "  %zu samples at %.0f Hz (%.2f s)\n", x.size(), sr, x.size() / sr);
+
+    auto r = ml::utu::computeAnalyzerParams(x.data(), x.size(), float(sr), budget);
+    printAutoParams(report, r);
+
+    auto partials = ml::utu::analyzeToPartials(x.data(), x.size(), r.params);
+    ml::cutHighs(*partials, r.hiCut);
+    ml::cleanOutliers(*partials);
+    if (partials->partials.empty())
+    {
+      fprintf(report, "  ERROR: analysis produced no partials\n");
+      ++failures;
+      continue;
+    }
+    ml::calcStats(*partials);
+    fprintf(report, "  analysis: %zu partials, max simultaneous %zu\n",
+            partials->partials.size(), partials->stats.maxActivePartials);
+
+    ml::utu::SynthParams sp;
+    sp.sampleRate = float(sr);
+    sp.fadeTime = 0.001f;
+    ml::utu::PartialSynthesizer synth;
+    synth.setParams(sp);
+    std::vector<float> out;
+    synth.render(*partials, out);
+
+    // preserve level; scale down only to prevent clipping
+    float peak = 0.f;
+    for (float v : out) peak = std::max(peak, fabsf(v));
+    if (peak > 1.f)
+    {
+      const float scale = 0.999f / peak;
+      for (auto& v : out) v *= scale;
+      fprintf(report, "  render: peak %.3f, scaled by %.3f to prevent clipping\n", peak,
+              scale);
+    }
+    else
+    {
+      fprintf(report, "  render: peak %.3f\n", peak);
+    }
+
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char ch) { return char(std::tolower(ch)); });
+    const int fmt = ((ext == ".wav") ? SF_FORMAT_WAV : SF_FORMAT_AIFF) | SF_FORMAT_PCM_24;
+    const fs::path outPath =
+        path.parent_path() / (path.stem().string() + "-converted" + path.extension().string());
+    if (!writeAudio(outPath.string(), out.data(), out.size(), sr, fmt))
+    {
+      fprintf(report, "  ERROR: could not write %s\n", outPath.filename().string().c_str());
+      ++failures;
+      continue;
+    }
+    fprintf(report, "  wrote %s\n", outPath.filename().string().c_str());
+  }
+  fclose(report);
+  printf("wrote %s\n", reportPath.string().c_str());
+  printf("convert-dir: %d/%zu files converted%s\n", int(files.size()) - failures, files.size(),
+         failures ? " (WITH ERRORS)" : "");
+  return failures ? 1 : 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -1428,12 +1590,15 @@ int main(int argc, char** argv)
         "  analyze-test <aiff>    full analysis + phase fix vs Loris::Analyzer\n"
         "  synth-test [aiff]      bandwidth-enhanced synthesis vs Loris::Synthesizer\n"
         "  nelson-test <aiff>     single-FFT cross-spectral reassignment vs Auger-Flandrin\n"
-        "  auto-test <aiff|@sine|@harm|@bell|@noise>  automatic analysis parameters\n");
+        "  auto-test <aiff|@sine|@harm|@bell|@noise>  automatic analysis parameters\n"
+        "  convert-dir <dir> [budget]   auto-analyze + resynthesize every audio file\n");
     return 2;
   }
   const std::string cmd(argv[1]);
   if (cmd == "nelson-test" && argc > 2) return nelsonTest(argv[2]);
   if (cmd == "auto-test" && argc > 2) return autoTest(argv[2]);
+  if (cmd == "convert-dir" && argc > 2)
+    return convertDir(argv[2], argc > 3 ? atoi(argv[3]) : 64);
   if (cmd == "fft-test") return fftTest();
   if (cmd == "window-test") return windowTest();
   if (cmd == "spectrum-test" && argc > 2) return spectrumTest(argv[2]);
