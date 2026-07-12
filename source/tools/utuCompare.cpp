@@ -38,6 +38,11 @@ namespace
 
 constexpr double kPi = 3.14159265358979324;
 
+// The installed libloris's AiffFile misparses the 80-bit extended sample
+// rate on this machine (it reports 11332 Hz for every file), so the rate is
+// hardcoded for the test sounds rather than read from the file.
+constexpr double kFileSampleRate = 44100.;
+
 // ---------------------------------------------------------------------------
 // fft-test: RealFFT vs naive double-precision DFT
 
@@ -203,7 +208,7 @@ int windowTest()
 int spectrumTest(const char* path)
 {
   Loris::AiffFile file(path);
-  const double sr = file.sampleRate();
+  const double sr = kFileSampleRate;
   std::vector<double>& samplesD = file.samples();
   const long nSamples = long(samplesD.size());
   std::vector<float> samplesF(samplesD.begin(), samplesD.end());
@@ -371,7 +376,7 @@ Loris::Peaks::iterator lorisThinPeaks(Loris::Peaks& peaks, double frameTime, dou
 int peaksTest(const char* path, bool withBandwidth)
 {
   Loris::AiffFile file(path);
-  const double sr = file.sampleRate();
+  const double sr = kFileSampleRate;
   std::vector<double>& samplesD = file.samples();
   const long nSamples = long(samplesD.size());
   std::vector<float> samplesF(samplesD.begin(), samplesD.end());
@@ -559,7 +564,7 @@ void utuPartialAt(const ml::VutuPartial& p, double t, double& freq, double& amp)
 int analyzeTest(const char* path)
 {
   Loris::AiffFile file(path);
-  const double sr = file.sampleRate();
+  const double sr = kFileSampleRate;
   std::vector<double>& samplesD = file.samples();
   const long nSamples = long(samplesD.size());
   std::vector<float> samplesF(samplesD.begin(), samplesD.end());
@@ -840,7 +845,7 @@ int synthTest(const char* path)
   if (path)
   {
     Loris::AiffFile file(path);
-    const double fsr = file.sampleRate();
+    const double fsr = kFileSampleRate;
     std::vector<double>& samplesD = file.samples();
     std::vector<float> samplesF(samplesD.begin(), samplesD.end());
 
