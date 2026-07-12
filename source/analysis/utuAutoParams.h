@@ -36,6 +36,14 @@ struct AutoAnalyzerParams
   bool budgetLimited{false};      // true: quality ascent stopped at the budget;
                                   // false: every quality ladder was exhausted
   float activeDuration{0.f};      // seconds of non-silent material measured
+
+  // regime diagnostics: dense material (measured beating / dispersed
+  // spacings) has its window chosen first, wide enough to merge the beat
+  // cluster, with resolution following as half the main lobe
+  bool dense{false};
+  float beatFraction{0.f};   // peaky share of 15-80 Hz band-envelope modulation
+  float beatRateHz{0.f};     // p90 beat rate
+  float mergeWindowHz{0.f};  // minimum window width demanded by the beats
 };
 
 // Estimate analysis parameters likely to produce a faithful reconstruction

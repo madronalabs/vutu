@@ -28,7 +28,8 @@ void PartialAnalyzer::configure(const AnalyzerParams& p)
   _selector.configure(_params.sampleRate, _params.cropTime);
   if (_params.bwRegionWidth > 0.f)
   {
-    _bwAssociator.configure(_params.bwRegionWidth, _params.sampleRate);
+    // residue gated to half a hop: counted once, in the nearest frame
+    _bwAssociator.configure(_params.bwRegionWidth, _params.sampleRate, 0.5f * _params.hopTime);
   }
   _tracker.configure(_params.freqDrift, _params.sampleRate);
 

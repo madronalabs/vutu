@@ -22,7 +22,15 @@ namespace ml::utu
 class AssociateBandwidth
 {
  public:
-  void configure(float regionWidthHz, float sampleRate);
+  // maxResidueOffsetSec > 0 gates residue by its reassigned time: a
+  // rejected peak only contributes surplus when its time correction places
+  // it within ±maxResidueOffsetSec of this frame. The window overlaps many
+  // frames, so without the gate a short broadband event (a mallet attack)
+  // deposits noise into every frame its window touches — a window length of
+  // smeared, over-counted rustle. With the gate at half a hop, each residue
+  // quantum is counted once, in the frame nearest its true time: the same
+  // reassignment principle the sinusoids get. 0 reproduces Loris exactly.
+  void configure(float regionWidthHz, float sampleRate, float maxResidueOffsetSec = 0.f);
 
   // associate residue energy in frame.peaks[numKept..) with the kept peaks,
   // setting their bw and adjusting their amp; resets region state after
@@ -34,6 +42,7 @@ class AssociateBandwidth
   std::vector<double> _weights;  // per-region amplitude weights
   std::vector<double> _surplus;  // per-region residue energy
   double _regionRate{0.};        // regions per Hz
+  float _maxResidueOffset{0.f};  // seconds; 0 = no gating (Loris behavior)
 };
 
 // Loris Breakpoint::addNoiseEnergy on a Peak with bandwidth already set

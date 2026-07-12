@@ -24,6 +24,11 @@ struct ReconstructionScore
   // (spurious low-rate AM that the source does not have)
   float wateryDb{0.f};
 
+  // excess 30-80 Hz modulation measured over decay segments only: the
+  // "rustle" artifact of misclassified residue riding on ringing partials
+  // where the source decays smoothly
+  float rustleDb{0.f};
+
   // mean loss of onset rise slope (dB/ms) at the source's transients
   float transientDeficit{0.f};
 

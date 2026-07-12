@@ -57,13 +57,15 @@ void distribute(double fractionalBin, double x, std::vector<double>& regions)
 
 }  // namespace
 
-void AssociateBandwidth::configure(float regionWidthHz, float sampleRate)
+void AssociateBandwidth::configure(float regionWidthHz, float sampleRate,
+                                   float maxResidueOffsetSec)
 {
   assert(regionWidthHz > 0.f && sampleRate > 0.f);
   const size_t numRegions = size_t(sampleRate / regionWidthHz);
   _weights.assign(numRegions, 0.);
   _surplus.assign(numRegions, 0.);
   _regionRate = 2. / regionWidthHz;
+  _maxResidueOffset = maxResidueOffsetSec;
 }
 
 double AssociateBandwidth::computeNoiseEnergy(double freq, double amp) const
@@ -131,6 +133,12 @@ void AssociateBandwidth::associateBandwidth(PeakFrame& frame)
   }
   for (size_t i = frame.numKept; i < peaks.size(); ++i)
   {
+    // residue whose reassigned time points away from this frame belongs to
+    // (and is counted in) the frame nearer its true time
+    if ((_maxResidueOffset > 0.f) && (fabsf(peaks[i].timeOffset) > _maxResidueOffset))
+    {
+      continue;
+    }
     if (peaks[i].freq > 0.f)
     {
       distribute(peaks[i].freq * _regionRate, double(peaks[i].amp) * peaks[i].amp, _surplus);

@@ -121,12 +121,18 @@ struct Ctx
   float loCut{20.f}, hiCut{20000.f}, ampFloorV1{-90.f};
   size_t stationaryCenter{0};  // sample index of strongest steady segment
 
+  // stage 1b
+  float beatFraction{0};  // peaky 15..80 Hz share of band-envelope modulation
+  float beatRate90{0};    // Hz, p90 of the detected beat-line energy
+
   // stage 2
   struct SigPeak { double freq, db; };
   std::vector<SigPeak> sigPeaks;
   float spacingDom{0}, spacingConf{0}, spacingMin{0};
   float f0{0}, pitchConf{0};
   bool pitched{false}, unpitched{false};
+  bool dense{false};   // beating/dispersed material: window chosen first
+  float mergeW{0};     // Hz, minimum window width that merges the beat cluster
 };
 
 // ---------------------------------------------------------------------------
@@ -397,6 +403,156 @@ void stage1(Ctx& c)
 }
 
 // ---------------------------------------------------------------------------
+// stage 1b: per-band beat spectrum. Beating between components the analysis
+// window fails to resolve cleanly is what the bandwidth mechanism
+// misclassifies as noise ("rustle"). The beats are directly visible in the
+// source's band envelopes — evidence no time-averaged spacing statistic can
+// provide, since sub-resolution component pairs merge into single peaks of
+// the averaged spectrum. Band envelopes at ~170 frames/s expose modulation
+// to ~85 Hz. The statistic counts 15-80 Hz modulation only in *tonal*
+// bands (bands whose spectrum stands well above the noise floor): fast
+// envelope modulation of tonal content is beating that the window must
+// merge or resolve, while modulation of noise bands is just noise — which
+// bandwidth enhancement models correctly. Dense polyphony produces a
+// thicket of beat lines, so no per-line peakiness test is applied.
+
+void stage1b(Ctx& c)
+{
+  const long N = 1024 * std::max(1L, long(c.sr / 48000. + 0.5));  // ~43 Hz bins
+  const long hop = N / 4;
+  const size_t active = c.activeEnd - c.activeBegin;
+  if (active < size_t(4 * N)) return;
+
+  constexpr int kBands = 8;
+  RealFFT fft(N);
+  const long bins = fft.bins();
+  const double binHz = c.sr / N;
+  long edges[kBands + 1];
+  const double fLo = 100., fHi = 0.4 * c.sr;
+  for (int b = 0; b <= kBands; ++b)
+  {
+    edges[b] = std::max(1L, long(fLo * std::pow(fHi / fLo, double(b) / kBands) / binHz));
+  }
+
+  // Hann window is plenty here: we need envelopes, not resolved partials
+  std::vector<float> win(N), seg(N), re(bins), im(bins);
+  for (long i = 0; i < N; ++i)
+  {
+    win[i] = 0.5f - 0.5f * cosf(2.f * float(kPi) * i / (N - 1));
+  }
+
+  std::vector<std::vector<float>> env(kBands);
+  for (size_t s = c.activeBegin; s + N <= c.activeEnd; s += hop)
+  {
+    for (long i = 0; i < N; ++i) seg[i] = c.x[s + i] * win[i];
+    fft.forward(seg.data(), re.data(), im.data());
+    for (int b = 0; b < kBands; ++b)
+    {
+      double e = 0.;
+      for (long k = edges[b]; k < edges[b + 1]; ++k)
+      {
+        e += double(re[k]) * re[k] + double(im[k]) * im[k];
+      }
+      env[b].push_back(float(e));
+    }
+  }
+  const size_t frames = env[0].size();
+  if (frames < 64) return;
+  const double envRate = c.sr / hop;
+
+  long modN = 64;
+  while (modN < long(frames)) modN *= 2;
+  const double modBinHz = envRate / modN;
+  const long kBeatLo = std::max(2L, long(15. / modBinHz));
+  const long kBeatHi = std::min(modN / 2 - 1, long(80. / modBinHz));
+  const long kTotLo = std::max(1L, long(2. / modBinHz));
+
+  RealFFT modFft(modN);
+  std::vector<float> me(modN), mre(modFft.bins()), mim(modFft.bins());
+  std::vector<double> beatHist(kBeatHi + 1, 0.);
+  double beatE = 0., totalE = 0.;
+
+  // bands carrying no meaningful signal energy have float-noise envelopes
+  // with huge relative modulation; exclude them (-50 dB of the strongest).
+  // Bands whose spectrum does not stand well above the noise floor are
+  // noise, not beating tones; exclude them too
+  double bandMeans[kBands];
+  double bestBandMean = 0.;
+  bool tonal[kBands];
+  for (int b = 0; b < kBands; ++b)
+  {
+    double mean = 0.;
+    for (float v : env[b]) mean += v;
+    bandMeans[b] = mean / frames;
+    bestBandMean = std::max(bestBandMean, bandMeans[b]);
+
+    tonal[b] = false;
+    if (!c.avgDb.empty())
+    {
+      const long kLo = std::max(1L, long(edges[b] * binHz / c.binHz));
+      const long kHi = std::min(long(c.avgDb.size()) - 1, long(edges[b + 1] * binHz / c.binHz));
+      // same significance bar as the stage-2 peak population; a decaying
+      // strike's modes are diluted by the time average, so this must not
+      // be stricter than the peak finder's own threshold
+      for (long k = kLo; k <= kHi; ++k)
+      {
+        if (c.avgDb[k] >= c.floorDb[k] + 15.f)
+        {
+          tonal[b] = true;
+          break;
+        }
+      }
+    }
+  }
+
+  for (int b = 0; b < kBands; ++b)
+  {
+    const double mean = bandMeans[b];
+    if ((mean <= bestBandMean * 1e-5) || !tonal[b]) continue;
+    std::fill(me.begin(), me.end(), 0.f);
+    for (size_t i = 0; i < frames; ++i) me[i] = float(env[b][i] / mean - 1.);
+    modFft.forward(me.data(), mre.data(), mim.data());
+
+    std::vector<double> p(kBeatHi + 2, 0.);
+    double bandModTotal = 0.;
+    for (long k = kTotLo; k <= kBeatHi; ++k)
+    {
+      p[k] = double(mre[k]) * mre[k] + double(mim[k]) * mim[k];
+      bandModTotal += p[k];
+    }
+    // a nearly-constant envelope's modulation spectrum is numerical noise;
+    // require a meaningful modulation index before believing its shape
+    if (10. * log10(std::max(1e-20, bandModTotal / frames)) < -55.)
+    {
+      continue;
+    }
+    // weight bands by their share of signal energy
+    const double w = mean;
+    totalE += w * bandModTotal;
+    for (long k = kBeatLo; k <= kBeatHi; ++k)
+    {
+      beatE += w * p[k];
+      beatHist[k] += w * p[k];
+    }
+  }
+
+  if (totalE > 0.)
+  {
+    c.beatFraction = float(beatE / totalE);
+    double cum = 0.;
+    for (long k = kBeatLo; k <= kBeatHi; ++k)
+    {
+      cum += beatHist[k];
+      if (cum >= 0.9 * beatE)
+      {
+        c.beatRate90 = float(k * modBinHz);
+        break;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // stage 2: partial spacing (spectral ACF), minimum spacing, fundamental
 
 void stage2(Ctx& c)
@@ -552,6 +708,37 @@ void stage2(Ctx& c)
     const float lowestReal = float(c.sigPeaks.front().freq);
     c.loCut = clampf(std::min(c.loCut, 0.75f * lowestReal), kLoCutLo, kLoCutHi);
   }
+
+  // regime classification. A component pair at spacing d has three fates
+  // under a window of main-lobe width W: merged (d < 0.3·W, its beat is
+  // tracked as an amplitude envelope — correct), resolved (d > 0.5·W, two
+  // partials — correct), or the partially-resolved bad zone in between,
+  // where unstable candidates get masked or rejected frame by frame and
+  // their energy is misclassified as noise. Dense material (beating
+  // decays, chords, polyphony) is detected primarily from the measured
+  // beat spectrum (stage 1b) — averaged-spectrum spacing statistics cannot
+  // see sub-resolution pairs — and secondarily from spacing dispersion.
+  // The window must then be wide enough to put the beat cluster in the
+  // merge zone: W >= cluster / 0.3.
+  if ((c.beatFraction > 0.15f) && (c.beatRate90 > 15.f))
+  {
+    c.dense = true;
+    c.mergeW = c.beatRate90 / 0.3f;
+  }
+  if ((c.spacingConf >= 0.4f) && (c.sigPeaks.size() >= 3))
+  {
+    std::vector<float> subCluster;
+    for (size_t i = 1; i < c.sigPeaks.size(); ++i)
+    {
+      const float d = float(c.sigPeaks[i].freq - c.sigPeaks[i - 1].freq);
+      if (d < 0.5f * c.spacingDom) subCluster.push_back(d);
+    }
+    if (subCluster.size() >= 3)
+    {
+      c.dense = true;
+      c.mergeW = std::max(c.mergeW, percentile(std::move(subCluster), 0.9f) / 0.3f);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,13 +752,21 @@ float deriveWindowWidth(const Ctx& c, float resolution)
   // interpolation of a sampled envelope at modulation rate r has peak error
   // ≈ (π·r/F)²/2, ≤14% at F = 6r. Modulation faster than the cap belongs to
   // bandwidth enhancement; chasing it with frame rate turns estimator
-  // jitter into synthesized FM noise
-  const float fMax = c.transients ? 500.f : std::max(250.f, float(6. * c.r95));
+  // jitter into synthesized FM noise. Dense material is exempt from the
+  // sustained-material cap: it was derived from the broadband RMS envelope,
+  // which is blind to the per-partial beating that demands the higher rate
+  const float fMax =
+      (c.transients || c.dense) ? 500.f : std::max(250.f, float(6. * c.r95));
 
   // at least ~3 window lengths within the sound (window length ≈ 8/W s)
   const float wFloor = std::max(kWidthLo, float(24. / std::max(0.05, c.activeDuration)));
 
   float w = std::min({2.f * resolution, fMax, kWidthHi});
+  // the merge demand overrides: beats must land in the merge zone
+  if (c.mergeW > 0.f)
+  {
+    w = std::max(w, std::min(c.mergeW, kWidthHi));
+  }
   w = std::max(w, wFloor);
 
   // anti-beating guard. The frame rate F samples every partial's envelopes;
@@ -642,7 +837,16 @@ void applyResolution(const Ctx& c, AnalyzerParams& p, float resolution)
 void stage3(Ctx& c, AnalyzerParams& p)
 {
   float res;
-  if (c.unpitched)
+  if (c.dense && (c.mergeW > 0.f))
+  {
+    // dense regime: the window is chosen first (wide enough to merge the
+    // beat cluster) and resolution follows as half the main lobe, so
+    // everything the window resolves is kept — nothing partially-resolved
+    // survives to be masked into noise. Budget pressure is handled by the
+    // quality walk's amplitude floor
+    res = 0.5f * std::min(c.mergeW, kWidthHi);
+  }
+  else if (c.unpitched)
   {
     // spread the partial budget across the occupied band: kept-peak density
     // after ±resolution masking is about one track per 1.25·resolution
@@ -958,6 +1162,7 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   }
 
   stage1(c);
+  stage1b(c);
   stage2(c);
   stage3(c, out.params);
   out.hiCut = c.hiCut;
@@ -986,6 +1191,10 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   out.noiseFloorDb = c.ampFloorV1 - 10.f;
   out.spacingHz = c.spacingDom;
   out.minSpacingHz = c.spacingMin;
+  out.dense = c.dense;
+  out.beatFraction = c.beatFraction;
+  out.beatRateHz = c.beatRate90;
+  out.mergeWindowHz = c.mergeW;
   const long hopSamples = std::max(1L, long(c.sr / out.params.windowWidth));
   out.frameRateHz = float(c.sr / hopSamples);
   out.activeDuration = float(c.activeDuration);

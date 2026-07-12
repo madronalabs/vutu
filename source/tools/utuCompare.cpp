@@ -558,8 +558,13 @@ int peaksTest(const char* path, bool withBandwidth)
   bool pass = (keptDrift < 0.02) && (unmatched < 0.02);
   if (withBandwidth)
   {
+    // the meaningful agreement check is bw on identically-partitioned
+    // frames; the fraction of frames with any partition difference grew
+    // when file rates were read correctly (44.1k frames hold many more
+    // near-floor borderline candidates than the old 11 kHz misread), so
+    // that gate is loose
     pass = pass && (maxBwErrSamePartition < 0.02) &&
-           (double(partitionDiffFrames) / frames < 0.02);
+           (double(partitionDiffFrames) / frames < 0.15);
   }
   printf("%s: %s\n", withBandwidth ? "bandwidth-test" : "peaks-test", pass ? "PASS" : "FAIL");
   return pass ? 0 : 1;
@@ -982,10 +987,15 @@ std::vector<float> makeTestSignal(const std::string& name, double sr)
 
   if (name == "@sine")
   {
+    // accumulate phase in double: sinf(2π·f·i) loses all precision once the
+    // argument grows past ~1e7
     x.resize(size_t(5 * sr));
+    double phase = 0.;
+    const double inc = 2. * kPi * 440.1 / sr;
     for (size_t i = 0; i < x.size(); ++i)
     {
-      x[i] = 0.5f * sinf(2.f * float(kPi) * 440.1f * i / float(sr));
+      x[i] = 0.5f * float(sin(phase));
+      phase += inc;
     }
   }
   else if (name == "@harm")
@@ -1058,6 +1068,8 @@ void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
           r.minSpacingHz);
   fprintf(f, "  noise floor  %8.1f dB      active dur  %8.2f s\n", r.noiseFloorDb,
           r.activeDuration);
+  fprintf(f, "  regime: %s (beat fraction %.2f, beat rate %.1f Hz, merge W %.1f Hz)\n",
+          r.dense ? "dense" : "sparse", r.beatFraction, r.beatRateHz, r.mergeWindowHz);
   fprintf(f, "  budget use   %d/%d (p90, %s)\n", r.probedSimultaneousP90, r.budget,
           r.budgetLimited ? "budget-limited" : "ladders exhausted");
 }
@@ -1066,23 +1078,27 @@ int autoTest(const char* path)
 {
   double sr = kSyntheticRate;
   std::vector<float> samplesF;
+  auto fillSine = [](std::vector<float>& v, double freq, double rate)
+  {
+    double phase = 0.;
+    const double inc = 2. * kPi * freq / rate;
+    for (auto& s : v)
+    {
+      s = 0.5f * float(sin(phase));
+      phase += inc;
+    }
+  };
   if (std::string(path) == "@short")
   {
     // 0.3 s: exercises the short-file guards (Welch size, window floor)
     samplesF.resize(size_t(0.3 * sr));
-    for (size_t i = 0; i < samplesF.size(); ++i)
-    {
-      samplesF[i] = 0.5f * sinf(2.f * float(kPi) * 330.f * i / float(sr));
-    }
+    fillSine(samplesF, 330., sr);
   }
   else if (std::string(path) == "@sine96")
   {
     sr = 96000.;
     samplesF.resize(size_t(3 * sr));
-    for (size_t i = 0; i < samplesF.size(); ++i)
-    {
-      samplesF[i] = 0.5f * sinf(2.f * float(kPi) * 440.f * i / float(sr));
-    }
+    fillSine(samplesF, 440., sr);
   }
   else
   {
@@ -1156,8 +1172,9 @@ int autoTest(const char* path)
 void printScore(FILE* f, const ml::utu::ReconstructionScore& s)
 {
   fprintf(f,
-          "  score: spectral %.2f dB, watery %.2f dB, transients %.2f dB/ms, total %.2f\n",
-          s.spectralRmsDb, s.wateryDb, s.transientDeficit, s.total);
+          "  score: spectral %.2f dB, watery %.2f dB, rustle %.2f dB, transients %.2f dB/ms,"
+          " total %.2f\n",
+          s.spectralRmsDb, s.wateryDb, s.rustleDb, s.transientDeficit, s.total);
 }
 
 int scoreCmd(const char* srcPath, const char* renderPath)

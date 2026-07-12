@@ -149,10 +149,44 @@ peaks matched across consecutive probe frames, since one-frame blips
 become one-breakpoint partials that cleanOutliers deletes (raw probe p90
 57 vs 23 achieved on the dense mix — the walk was over-raising the floor).
 
-Next-round candidates, in order: (1) decay-continuity metric component
-(prerequisite for trusting tune on percussive sounds); (2) **predictive
-tracking** (per-track frequency extrapolation + small gate, plus
-amp/phase continuity costs) — the remaining wateriness and both drift
-corrections point straight at track instability; (3) drift estimator
-robustness (censoring-aware); (4) transient handling for percussive
-attacks (short-window band or onset-locked analysis).
+## Noise generation from first principles (2026-07-12)
+
+Ear evidence (gambang/Careless): windowWidth 170-305 vs auto's 65-80 was
+night-and-day; noiseWidth→10 killed the artifacts; noise events covered
+whole decays at low W, only attacks at high W. Theory: a component pair at
+spacing d is *merged* below ~0.3·W (beat tracked as amplitude envelope —
+correct), *resolved* above ~0.5·W (two partials — correct), and in the
+**partially-resolved bad zone** between (unstable candidates → masked or
+rejected → residue → noise-AM = "rustle"). Also, residue was deposited
+into every overlapping frame ignoring its reassigned time: one attack
+contaminated a window length of decay, over-counted by the overlap factor.
+
+Fixes:
+- **Two-regime window rule.** Dense material is detected by a measured
+  per-band beat statistic (stage 1b: 15-80 Hz modulation of *tonal* band
+  envelopes; tonality gate = spectrum ≥ floor+15 dB in-band, since noise
+  bands legitimately belong to bandwidth). Spacing statistics cannot see
+  this — sub-resolution pairs merge in the averaged spectrum. Dense ⇒
+  window first: W ≥ beatRate90/0.3 (merge the beat cluster), resolution =
+  W/2 (nothing partially-resolved survives to be masked). Measured merge
+  demands reproduce the ear-found optima: Careless 174 (ear: 170),
+  gambang 155 (ear: 170-305). Clean sounds keep the old rule unchanged.
+- **Time-gated residue**: AssociateBandwidth skips rejected peaks whose
+  reassigned time is beyond ±hop/2 — noise is reassigned like sinusoids;
+  attack residue lands at attacks once. bandwidth-test runs ungated for
+  Loris parity.
+- **Rustle metric**: excess *median* 30-80 Hz band-envelope modulation
+  over decay segments (medians, because dense material beats naturally —
+  lines — while rustle is a raised modulation floor). Onsets are
+  jump-above-recent-past (≥12 dB over 6-20 ms); per-block slope tests
+  fire continuously on beating decays. Validated: the render Randy heard
+  as crunchy scores rustle 3.06/transients 4.08 where the old metric saw
+  0.00; tune now walks W upward (155→202, rustle falling), agreeing with
+  the ears instead of trading rustle away.
+
+Next-round candidates: (1) **predictive tracking** (per-track frequency
+extrapolation + small gate, plus amp/phase continuity costs); (2) the
+merge constant and beat-statistic ceiling (envelope Nyquist ~86 Hz caps
+beatRate90 below the ear-optimal 305 Hz demand for gambang — a faster
+envelope pass would let the merge rule reach it); (3) drift estimator
+robustness; (4) onset-locked analysis for percussive attacks.
