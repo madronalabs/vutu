@@ -26,22 +26,35 @@ Cost picture first (44.1 kHz, windowWidth 160 Hz): winlen ≈ 2175, N = 8192,
 3 real FFTs per 275-sample hop. With a SIMD FFT this is well under 1% of one
 core — **CPU is not the wall; lookahead is**: winlen/2 ≈ 25 ms.
 
-### A. Single-FFT reassignment via cross-spectral surfaces (eqs. 54–57)
-Nelson's finite-difference form replaces both auxiliary transforms:
-- freq: cross-spectrum between consecutive hops, C = Xₙ·conj(Xₙ₋₁),
-  demodulated by the expected per-hop rotation; correction = arg/(hop).
-  Valid while the deviation stays under π, i.e. |f̂ − f_bin| < windowWidth/2 —
-  exactly the main-lobe half-width, so it holds across each component's
-  consensus region.
-- time: adjacent-bin cross-spectrum L = X[k+1]·conj(X[k]);
-  correction ≈ −arg(L)·N/2π samples. Same transform, neighbor products.
+### A. Cross-spectral (finite-difference) reassignment (eqs. 54–57)
+**Measured** (utucompare `nelson-test`, sine + cello/flute/clarinet at
+44.1 kHz, res 80 / width 160; errors at strong (0..−40 dB) AF peak bins):
 
-Net: 3 FFTs/hop → 1, and the Xd/Xt arrays disappear. Costs: an arg() per bin
-(small-angle Im/Re ratio suffices near peaks, which is where accuracy
-matters — Sec. 6.1 notes FD is excellent in high-energy regions), and the
-estimates become approximations. Validate by adding both estimators to
-utucompare and comparing corrections at kept peaks. **Best cost/benefit; try
-first.**
+- *Hop-spaced cross-frames (the free variant, 1 FFT/hop): dead.* The wrap
+  bound |f̂ − f_bin| < sr/(2·hop) equals the main-lobe half-width exactly
+  (hop = 1/windowWidth), leaving zero margin, and 6 ms finite differences
+  measure a frequency *average*, not an instantaneous value: 0.16–0.33 bins
+  RMS at strong peaks on real sounds (vs 2e-4 on an ideal sine).
+- *Δt = one sample (2 FFTs/hop, windows at t and t+1): viable for frequency.*
+  Wrap-free to Nyquist. Freq agreement with Auger-Flandrin at strong peaks:
+  0.008–0.016 bins RMS (≈ 0.04–0.09 Hz); significant (>−60 dB) candidate
+  sets from the sign-crossing scan agree to 98.8–99.2%.
+- *Adjacent-bin time surface: gate-quality only.* 2.3–3.2 samples RMS at
+  strong peaks, large outliers off-peak. Fine for the cropTime gate; not
+  fine for breakpoint times or phase (a tc error of a few samples at bin k
+  is ~k·2π/N rad of phase error — radians at high bins).
+
+**Recommended shape (A₂ hybrid, ~⅓ fewer FFT ops, partial parameters stay
+exact):** two FFTs of h (at t and t+1) for the scan + frequency everywhere +
+rough tc for gating; then exact Xt[k] (Goertzel/direct dot products of
+x·hT, and Xd[k] if exact frequency is wanted too) at kept peaks only —
+tens of peaks × winlen MACs ≈ a quarter of an FFT. Time and phase keep
+full Auger-Flandrin precision where they end up in partials.
+
+**A′ (future, 1 FFT):** magnitude-maxima selection (no per-bin corrections
+needed for the scan) + exact per-peak DFTs for freq/time/phase. Changes
+selection behavior — loses the consensus discrimination of the
+reassignment-minima scan — so it needs its own end-to-end evaluation.
 
 ### B. Cosine-sum windows: exact hD from one FFT
 For any cosine-sum window (Hann … 4-term Blackman-Harris), h′ is a sine sum,
@@ -88,4 +101,7 @@ transform time. Only matters after A/C, or at high rates.
   region-based residue association with something that needs no global
   kept/rejected bookkeeping — attractive for a streaming engine.
 
-Suggested order: **A → C → (B if A's time estimates disappoint) → D → G.**
+Suggested order after the A experiment: **C (latency) is the priority — CPU
+was never the wall; A₂ is validated and shelved until transform cost
+matters (high sample rates, many bands, or small hops); B remains the
+fallback if exact single-FFT frequency is ever wanted; then D, G.**
