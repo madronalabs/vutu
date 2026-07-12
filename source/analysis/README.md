@@ -184,9 +184,25 @@ Fixes:
   0.00; tune now walks W upward (155→202, rustle falling), agreeing with
   the ears instead of trading rustle away.
 
+**noiseWidth ratio rule (2026-07-12, ear-calibrated)**: in the dense
+regime, noiseWidth = windowWidth / 3.4 (gambang: W 155 → R 46; ear optimum
+~50 at W 170; noiseWidth 310 was the remaining rustle source). Theory:
+the reassigned spectrum is clean of candidates out to ~W/2 around each
+kept partial (the consensus region admits no sign-crossings); junk
+candidates live beyond that, so the residue-collection radius must stay
+inside — a fixed W/R ratio, which also restores the analyzer's
+self-similarity in W. Sparse sounds keep wide regions (little junk; small
+regions would drop genuine inter-harmonic noise).
+**Metric limitation recorded**: the composite score *prefers* the wide
+regions (its spectral term counts dropped residue as error equal to added
+rustle, and concentrated noise reads as more modulation) — ears override
+it on this axis; the metric needs a perceptual asymmetry between missing
+noise and added rustle before tune can search noiseWidth honestly.
+
 Next-round candidates: (1) **predictive tracking** (per-track frequency
 extrapolation + small gate, plus amp/phase continuity costs); (2) the
 merge constant and beat-statistic ceiling (envelope Nyquist ~86 Hz caps
 beatRate90 below the ear-optimal 305 Hz demand for gambang — a faster
-envelope pass would let the merge rule reach it); (3) drift estimator
-robustness; (4) onset-locked analysis for percussive attacks.
+envelope pass would let the merge rule reach it); (3) metric: asymmetric
+noise scoring per the limitation above; (4) drift estimator robustness;
+(5) onset-locked analysis for percussive attacks.

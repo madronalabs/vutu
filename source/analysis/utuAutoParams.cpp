@@ -1169,13 +1169,28 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   out.budget = c.budget;
   walkQuality(c, out.params, out.hiCut, out);
 
-  // noise regions: at least ~3 kept-peak spacings wide so residue always
-  // lands in a region that still holds a kept peak to carry it; at most
-  // 2 kHz (largest auditory-filter scale — beyond that, noise attaches to
-  // perceptually unrelated partials). Small is the safe direction for bass:
-  // the associator discards residue below about one region width
-  out.params.bwRegionWidth =
-      clampf(4.f * out.params.resolution, std::max(kNoiseWidthLo, 250.f), 2000.f);
+  // noise regions. Dense regime: the reassigned spectrum is clean of
+  // candidates out to about half the main lobe around each kept partial
+  // (the consensus region admits no sign-crossings); junk candidates —
+  // sidelobe artifacts, unresolved-pair interference — live beyond ~W/2.
+  // The residue-collection radius must stay inside that clean zone, which
+  // fixes the window/noiseWidth *ratio* (ear-calibrated: W 170 -> R 50).
+  // This also restores self-similarity: every other frequency scale in the
+  // analyzer tracks W. Sparse regime: little junk exists and a small
+  // region would drop genuine inter-harmonic noise (regions without a kept
+  // peak lose their residue), so regions stay wide: ~3 kept-peak spacings
+  // up to the 2 kHz auditory-filter scale.
+  constexpr float kWindowToNoiseRatio = 3.4f;
+  if (c.dense)
+  {
+    out.params.bwRegionWidth =
+        clampf(out.params.windowWidth / kWindowToNoiseRatio, kNoiseWidthLo, 2000.f);
+  }
+  else
+  {
+    out.params.bwRegionWidth =
+        clampf(4.f * out.params.resolution, std::max(kNoiseWidthLo, 250.f), 2000.f);
+  }
 
   if (c.pitched)
   {

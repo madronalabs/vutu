@@ -1261,11 +1261,13 @@ int tuneCmd(const char* path, int budget)
   auto gDrift = [](ml::utu::AnalyzerParams& a) { return &a.freqDrift; };
   auto gRes = [](ml::utu::AnalyzerParams& a) { return &a.resolution; };
   auto gFloor = [](ml::utu::AnalyzerParams& a) { return &a.ampFloor; };
+  auto gNoise = [](ml::utu::AnalyzerParams& a) { return &a.bwRegionWidth; };
   Knob knobs[] = {
       {"windowWidth", 16.f, 768.f, true, 1.3f, gWidth},
       {"freqDrift", 2.f, 80.f, true, 2.f, gDrift},
       {"resolution", 8.f, 1024.f, true, 1.3f, gRes},
       {"ampFloor", -90.f, -20.f, false, 9.f, gFloor},
+      {"noiseWidth", 10.f, 5000.f, true, 2.f, gNoise},
   };
 
   const int sweeps = 2;
