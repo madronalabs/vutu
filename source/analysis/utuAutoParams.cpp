@@ -122,8 +122,9 @@ struct Ctx
   size_t stationaryCenter{0};  // sample index of strongest steady segment
 
   // stage 1b
-  float beatFraction{0};  // peaky 15..80 Hz share of band-envelope modulation
-  float beatRate90{0};    // Hz, p90 of the detected beat-line energy
+  float beatIndexDb{-120.f};  // absolute beat-band modulation index, dB
+  float beatFraction{0};      // beat-band share of all sub-beat-top modulation
+  float beatRate90{0};        // Hz, p90 of the beat-band modulation energy
 
   // stage 2
   struct SigPeak { double freq, db; };
@@ -418,59 +419,143 @@ void stage1(Ctx& c)
 
 void stage1b(Ctx& c)
 {
-  const long N = 1024 * std::max(1L, long(c.sr / 48000. + 0.5));  // ~43 Hz bins
-  const long hop = N / 4;
   const size_t active = c.activeEnd - c.activeBegin;
-  if (active < size_t(4 * N)) return;
+  if (active < size_t(0.25 * c.sr)) return;
 
+  // Band envelopes from a time-domain filter bank rather than an STFT: an
+  // STFT-based envelope lowpasses AM at roughly 1/frameLength (a 23 ms
+  // frame ceilinged the old statistic near 43 Hz — right where dense
+  // material's measured beat rates were piling up). Bandpassed, rectified,
+  // 300 Hz-followed envelopes decimated to ~700 Hz measure modulation
+  // cleanly to ~250 Hz. Offline estimation code: scalar doubles for
+  // clarity, cost is 8 biquads over the file.
   constexpr int kBands = 8;
-  RealFFT fft(N);
-  const long bins = fft.bins();
-  const double binHz = c.sr / N;
-  long edges[kBands + 1];
-  const double fLo = 100., fHi = 0.4 * c.sr;
-  for (int b = 0; b <= kBands; ++b)
-  {
-    edges[b] = std::max(1L, long(fLo * std::pow(fHi / fLo, double(b) / kBands) / binHz));
-  }
+  // bands start at 300 Hz: a real input excites the resonator's
+  // negative-frequency image too, putting ripple at 2f on |z|; with f >=
+  // 300 the ripple sits at >= 600 Hz where the narrow resonator and the
+  // cascaded 200 Hz envelope smoothing together bury it (~-80 dB energy)
+  // before decimation can alias it into the beat band. Beats of sub-300 Hz
+  // component pairs go unmeasured — a documented blind spot
+  const double fLo = 300., fHi = 0.4 * c.sr;
+  const long decim = std::max(1L, long(c.sr / 700.));
+  const double envRate = c.sr / decim;
 
-  // Hann window is plenty here: we need envelopes, not resolved partials
-  std::vector<float> win(N), seg(N), re(bins), im(bins);
-  for (long i = 0; i < N; ++i)
+  // 4th-order Butterworth lowpass at 270 Hz (two biquad sections): the
+  // decimation filter for the envelopes. The envelope of a real narrowband
+  // signal unavoidably ripples at 2f (negative-frequency image); with
+  // measurement bands starting at 300 Hz the ripple lives at >= 600 Hz —
+  // squarely in this filter's stopband — while beats to 250 Hz pass
+  struct BiquadLP
   {
-    win[i] = 0.5f - 0.5f * cosf(2.f * float(kPi) * i / (N - 1));
+    double b0, b1, b2, a1, a2;
+    double z1{0}, z2{0};
+    double process(double x)
+    {
+      const double y = b0 * x + z1;
+      z1 = b1 * x - a1 * y + z2;
+      z2 = b2 * x - a2 * y;
+      return y;
+    }
+  };
+  auto makeLP = [&](double fc, double q)
+  {
+    BiquadLP f;
+    const double w0 = 2. * kPi * fc / c.sr;
+    const double alpha = sin(w0) / (2. * q);
+    const double cw = cos(w0);
+    const double a0 = 1. + alpha;
+    f.b0 = (1. - cw) / 2. / a0;
+    f.b1 = (1. - cw) / a0;
+    f.b2 = f.b0;
+    f.a1 = -2. * cw / a0;
+    f.a2 = (1. - alpha) / a0;
+    return f;
+  };
+
+  struct Band
+  {
+    double ar, ai;  // complex pole
+    double g;       // input gain
+    double zr{0}, zi{0};
+    BiquadLP lp1, lp2;      // 4th-order Butterworth decimation filter
+    double env{0};
+    double bandLo, bandHi;  // Hz, for the tonality gate
+  };
+  Band bands[kBands];
+  for (int b = 0; b < kBands; ++b)
+  {
+    bands[b].bandLo = fLo * std::pow(fHi / fLo, double(b) / kBands);
+    bands[b].bandHi = fLo * std::pow(fHi / fLo, double(b + 1) / kBands);
+    const double center = sqrt(bands[b].bandLo * bands[b].bandHi);
+    // the resonator only needs to capture beats (<= ~250 Hz pair spacings),
+    // not span its whole nominal band; narrow poles also shrink the
+    // negative-frequency image
+    const double bw = std::min(bands[b].bandHi - bands[b].bandLo, 600.);
+    const double r = exp(-kPi * bw / c.sr);
+    const double w0 = 2. * kPi * center / c.sr;
+    bands[b].ar = r * cos(w0);
+    bands[b].ai = r * sin(w0);
+    bands[b].g = 1. - r;
+    bands[b].lp1 = makeLP(270., 0.5412);  // Butterworth Q pair
+    bands[b].lp2 = makeLP(270., 1.3066);
   }
 
   std::vector<std::vector<float>> env(kBands);
-  for (size_t s = c.activeBegin; s + N <= c.activeEnd; s += hop)
+  for (int b = 0; b < kBands; ++b) env[b].reserve(active / decim + 1);
+  long phase = 0;
+  // skip the filter settling transient: its step would otherwise leak
+  // across the whole modulation spectrum
+  const size_t settle = c.activeBegin + size_t(0.1 * c.sr);
+  for (size_t i = c.activeBegin; i < c.activeEnd; ++i)
   {
-    for (long i = 0; i < N; ++i) seg[i] = c.x[s + i] * win[i];
-    fft.forward(seg.data(), re.data(), im.data());
+    const double x = c.x[i];
     for (int b = 0; b < kBands; ++b)
     {
-      double e = 0.;
-      for (long k = edges[b]; k < edges[b + 1]; ++k)
+      const double zr = bands[b].ar * bands[b].zr - bands[b].ai * bands[b].zi + bands[b].g * x;
+      const double zi = bands[b].ar * bands[b].zi + bands[b].ai * bands[b].zr;
+      bands[b].zr = zr;
+      bands[b].zi = zi;
+      bands[b].env = bands[b].lp2.process(bands[b].lp1.process(sqrt(zr * zr + zi * zi)));
+    }
+    if (++phase == decim)
+    {
+      phase = 0;
+      if (i >= settle)
       {
-        e += double(re[k]) * re[k] + double(im[k]) * im[k];
+        for (int b = 0; b < kBands; ++b) env[b].push_back(float(bands[b].env));
       }
-      env[b].push_back(float(e));
     }
   }
   const size_t frames = env[0].size();
   if (frames < 64) return;
-  const double envRate = c.sr / hop;
+
+  // Beats faster than about half the dominant component spacing are the
+  // interference of *resolved* neighbors sharing a measurement band — the
+  // primary-resolution rule already handles those pairs, and merging them
+  // would mask real partials. Only slower beats demand merging.
+  double beatHiHz = 120.;  // conservative when no spacing is known
+  if (c.pitched && (c.f0 > 0.f))
+  {
+    beatHiHz = 0.6 * c.f0;
+  }
+  if (c.spacingConf >= 0.4f)
+  {
+    beatHiHz = std::max(beatHiHz, 0.6 * c.spacingDom);
+  }
+  beatHiHz = std::min(beatHiHz, 250.);
 
   long modN = 64;
   while (modN < long(frames)) modN *= 2;
   const double modBinHz = envRate / modN;
   const long kBeatLo = std::max(2L, long(15. / modBinHz));
-  const long kBeatHi = std::min(modN / 2 - 1, long(80. / modBinHz));
+  const long kBeatHi = std::min(modN / 2 - 1, long(beatHiHz / modBinHz));
   const long kTotLo = std::max(1L, long(2. / modBinHz));
+  if (kBeatHi <= kBeatLo) return;
 
   RealFFT modFft(modN);
   std::vector<float> me(modN), mre(modFft.bins()), mim(modFft.bins());
   std::vector<double> beatHist(kBeatHi + 1, 0.);
-  double beatE = 0., totalE = 0.;
+  double beatE = 0., modE = 0., weightSum = 0.;
 
   // bands carrying no meaningful signal energy have float-noise envelopes
   // with huge relative modulation; exclude them (-50 dB of the strongest).
@@ -489,8 +574,8 @@ void stage1b(Ctx& c)
     tonal[b] = false;
     if (!c.avgDb.empty())
     {
-      const long kLo = std::max(1L, long(edges[b] * binHz / c.binHz));
-      const long kHi = std::min(long(c.avgDb.size()) - 1, long(edges[b + 1] * binHz / c.binHz));
+      const long kLo = std::max(1L, long(bands[b].bandLo / c.binHz));
+      const long kHi = std::min(long(c.avgDb.size()) - 1, long(bands[b].bandHi / c.binHz));
       // same significance bar as the stage-2 peak population; a decaying
       // strike's modes are diluted by the time average, so this must not
       // be stricter than the peak finder's own threshold
@@ -508,9 +593,17 @@ void stage1b(Ctx& c)
   for (int b = 0; b < kBands; ++b)
   {
     const double mean = bandMeans[b];
-    if ((mean <= bestBandMean * 1e-5) || !tonal[b]) continue;
+    // envelopes are amplitude-like: -50 dB energy gate on mean²
+    if ((mean * mean <= bestBandMean * bestBandMean * 1e-5) || !tonal[b]) continue;
     std::fill(me.begin(), me.end(), 0.f);
-    for (size_t i = 0; i < frames; ++i) me[i] = float(env[b][i] / mean - 1.);
+    // Hann window: without it, slow envelope drift (decays!) leaks a
+    // broadband floor across the modulation spectrum that swamps the
+    // beat band
+    for (size_t i = 0; i < frames; ++i)
+    {
+      const float w = 0.5f - 0.5f * cosf(2.f * float(kPi) * i / (frames - 1));
+      me[i] = w * float(env[b][i] / mean - 1.);
+    }
     modFft.forward(me.data(), mre.data(), mim.data());
 
     std::vector<double> p(kBeatHi + 2, 0.);
@@ -520,15 +613,11 @@ void stage1b(Ctx& c)
       p[k] = double(mre[k]) * mre[k] + double(mim[k]) * mim[k];
       bandModTotal += p[k];
     }
-    // a nearly-constant envelope's modulation spectrum is numerical noise;
-    // require a meaningful modulation index before believing its shape
-    if (10. * log10(std::max(1e-20, bandModTotal / frames)) < -55.)
-    {
-      continue;
-    }
-    // weight bands by their share of signal energy
-    const double w = mean;
-    totalE += w * bandModTotal;
+    // weight bands by their share of signal energy (amplitude envelope
+    // squared)
+    const double w = mean * mean;
+    weightSum += w;
+    modE += w * bandModTotal;
     for (long k = kBeatLo; k <= kBeatHi; ++k)
     {
       beatE += w * p[k];
@@ -536,9 +625,21 @@ void stage1b(Ctx& c)
     }
   }
 
-  if (totalE > 0.)
+  // Two complementary statistics, each guarding against a different
+  // impostor. beatIndexDb is the *absolute* beat-band modulation index: how
+  // much AM, in dB, the tonal band envelopes carry at beat rates. Real
+  // beating measures -10..+20 dB; the resonator's residual
+  // negative-frequency image ripple is ~-33 dB, so an absolute threshold
+  // rejects it even on sounds with no other modulation (where a fraction's
+  // denominator collapses and promotes the artifact to 100%). The 3/8 Hann
+  // power gain is a constant offset absorbed by the threshold.
+  // beatFraction is the beat band's share of all modulation from 2 Hz up:
+  // sounds ruled by slow modulation (vibrato, tremolo, breath) have real
+  // but subordinate beat-rate energy and analyze best in the sparse regime.
+  if (weightSum > 0.)
   {
-    c.beatFraction = float(beatE / totalE);
+    c.beatIndexDb = float(10. * log10(std::max(1e-12, beatE / weightSum / frames)));
+    if (modE > 0.) c.beatFraction = float(beatE / modE);
     double cum = 0.;
     for (long k = kBeatLo; k <= kBeatHi; ++k)
     {
@@ -709,18 +810,32 @@ void stage2(Ctx& c)
     c.loCut = clampf(std::min(c.loCut, 0.75f * lowestReal), kLoCutLo, kLoCutHi);
   }
 
-  // regime classification. A component pair at spacing d has three fates
-  // under a window of main-lobe width W: merged (d < 0.3·W, its beat is
-  // tracked as an amplitude envelope — correct), resolved (d > 0.5·W, two
-  // partials — correct), or the partially-resolved bad zone in between,
-  // where unstable candidates get masked or rejected frame by frame and
-  // their energy is misclassified as noise. Dense material (beating
-  // decays, chords, polyphony) is detected primarily from the measured
-  // beat spectrum (stage 1b) — averaged-spectrum spacing statistics cannot
-  // see sub-resolution pairs — and secondarily from spacing dispersion.
-  // The window must then be wide enough to put the beat cluster in the
-  // merge zone: W >= cluster / 0.3.
-  if ((c.beatFraction > 0.15f) && (c.beatRate90 > 15.f))
+}
+
+// ---------------------------------------------------------------------------
+// regime classification. A component pair at spacing d has three fates
+// under a window of main-lobe width W: merged (d < 0.3·W, its beat is
+// tracked as an amplitude envelope — correct), resolved (d > 0.5·W, two
+// partials — correct), or the partially-resolved bad zone in between,
+// where unstable candidates get masked or rejected frame by frame and
+// their energy is misclassified as noise. Dense material (beating decays,
+// chords, polyphony) is detected primarily from the measured beat spectrum
+// (stage 1b) — averaged-spectrum spacing statistics cannot see
+// sub-resolution pairs — and secondarily from spacing dispersion. The
+// window must then be wide enough to put the beat cluster in the merge
+// zone: W >= cluster / 0.3.
+
+void classifyRegime(Ctx& c)
+{
+  // Three gates, one per impostor: the absolute index rejects the
+  // resonator's residual image ripple (~-33 dB vs -10..+20 dB for real
+  // beats); the fraction rejects material ruled by slow modulation
+  // (vibrato/tremolo/breath — real beat energy, but subordinate, and the
+  // sparse regime serves it better); the rate floor rejects the DC skirt
+  // of decay envelopes leaking into the bottom modulation bins (harmless
+  // to real dense material: beats under 30 Hz demand a merge window no
+  // wider than the sparse rule already provides).
+  if ((c.beatIndexDb > -25.f) && (c.beatFraction > 0.15f) && (c.beatRate90 > 30.f))
   {
     c.dense = true;
     c.mergeW = c.beatRate90 / 0.3f;
@@ -1162,8 +1277,9 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   }
 
   stage1(c);
-  stage1b(c);
   stage2(c);
+  stage1b(c);  // after stage 2: the beat band is capped by the spacing
+  classifyRegime(c);
   stage3(c, out.params);
   out.hiCut = c.hiCut;
   out.budget = c.budget;
@@ -1207,6 +1323,7 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   out.spacingHz = c.spacingDom;
   out.minSpacingHz = c.spacingMin;
   out.dense = c.dense;
+  out.beatIndexDb = c.beatIndexDb;
   out.beatFraction = c.beatFraction;
   out.beatRateHz = c.beatRate90;
   out.mergeWindowHz = c.mergeW;

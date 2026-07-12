@@ -163,14 +163,14 @@ contaminated a window length of decay, over-counted by the overlap factor.
 
 Fixes:
 - **Two-regime window rule.** Dense material is detected by a measured
-  per-band beat statistic (stage 1b: 15-80 Hz modulation of *tonal* band
+  per-band beat statistic (stage 1b: beat-rate modulation of *tonal* band
   envelopes; tonality gate = spectrum ≥ floor+15 dB in-band, since noise
   bands legitimately belong to bandwidth). Spacing statistics cannot see
   this — sub-resolution pairs merge in the averaged spectrum. Dense ⇒
   window first: W ≥ beatRate90/0.3 (merge the beat cluster), resolution =
   W/2 (nothing partially-resolved survives to be masked). Measured merge
-  demands reproduce the ear-found optima: Careless 174 (ear: 170),
-  gambang 155 (ear: 170-305). Clean sounds keep the old rule unchanged.
+  demands reproduce the ear-found optima (see the fast envelope pass
+  below). Clean sounds keep the old rule unchanged.
 - **Time-gated residue**: AssociateBandwidth skips rejected peaks whose
   reassigned time is beyond ±hop/2 — noise is reassigned like sinusoids;
   attack residue lands at attacks once. bandwidth-test runs ungated for
@@ -199,10 +199,45 @@ rustle, and concentrated noise reads as more modulation) — ears override
 it on this axis; the metric needs a perceptual asymmetry between missing
 noise and added rustle before tune can search noiseWidth honestly.
 
+## Fast envelope pass for the beat statistic (2026-07-12)
+
+The first beat statistic reused the stage-1 STFT band envelopes; their
+frame rate ceilinged measurable beat rates at ~43-86 Hz, well below the
+ear-optimal ~305 Hz merge demand on gambang. Replaced with a time-domain
+pass: complex one-pole resonators (8 log-spaced bands, 300 Hz to 0.4·sr,
+bandwidth ≤ 600 Hz — a complex pole gives the analytic band signal
+directly, so |z| is the true envelope with no rectification ripple at 2f),
+|z| → 4th-order Butterworth lowpass at 270 Hz → decimation to ~700 Hz.
+The first 0.1 s is skipped (resonator settle) and the modulation FFT is
+Hann-windowed — without the window, slow decay drift leaks a broadband
+floor that swamps the beat band.
+
+Artifacts fought, so they stay fought: naive |bandpass| rectification puts
+ripple at 2f that aliases through the decimator (a 440 Hz sine measured a
+phantom "beat" at 180 Hz = 880 − 700); the complex resonator's residual
+negative-frequency image still leaves ~-33 dB of 2f ripple; unwindowed
+modulation FFTs leak decay energy everywhere.
+
+The classifier takes three gates, one per impostor (all measured):
+- **beat index > -25 dB** — *absolute* beat-band modulation of the tonal
+  band envelopes. Real beating measures -10..+21 dB; the image-ripple
+  artifact ~-33 dB. A *fraction* alone is fragile: its denominator
+  collapses on steady sounds, promoting the artifact to 100% (@sine).
+- **beat fraction > 0.15** — beat band's share of all modulation from
+  2 Hz up. Sounds ruled by slow modulation (vibrato/tremolo/breath) carry
+  real but subordinate beat energy and analyze best sparse (flute 0.09,
+  clarinet 0.02 vs gambang 0.18, Careless 0.49).
+- **beatRate90 > 30 Hz** — decay envelopes leak a DC skirt into the
+  bottom modulation bins that masquerades as slow beating (@bell: rate
+  pinned at 15.2 Hz, the band edge). Harmless to real dense material:
+  beats under 30 Hz demand no wider window than the sparse rule gives.
+
+Result: gambang merge W 289 (ear optimum 170-305), Careless 338, cello
+dense at fraction 0.17 (borderline — ear check pending); flute, clarinet,
+@sine, @bell, @noise, @short, @sine96 sparse; @harm dense from genuine
+vibrato FM-to-AM in the resonator bands.
+
 Next-round candidates: (1) **predictive tracking** (per-track frequency
-extrapolation + small gate, plus amp/phase continuity costs); (2) the
-merge constant and beat-statistic ceiling (envelope Nyquist ~86 Hz caps
-beatRate90 below the ear-optimal 305 Hz demand for gambang — a faster
-envelope pass would let the merge rule reach it); (3) metric: asymmetric
-noise scoring per the limitation above; (4) drift estimator robustness;
-(5) onset-locked analysis for percussive attacks.
+extrapolation + small gate, plus amp/phase continuity costs); (2) metric:
+asymmetric noise scoring per the limitation above; (3) drift estimator
+robustness; (4) onset-locked analysis for percussive attacks.

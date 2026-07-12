@@ -1068,8 +1068,9 @@ void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
           r.minSpacingHz);
   fprintf(f, "  noise floor  %8.1f dB      active dur  %8.2f s\n", r.noiseFloorDb,
           r.activeDuration);
-  fprintf(f, "  regime: %s (beat fraction %.2f, beat rate %.1f Hz, merge W %.1f Hz)\n",
-          r.dense ? "dense" : "sparse", r.beatFraction, r.beatRateHz, r.mergeWindowHz);
+  fprintf(f, "  regime: %s (beat index %.1f dB, fraction %.2f, rate %.1f Hz, merge W %.1f Hz)\n",
+          r.dense ? "dense" : "sparse", r.beatIndexDb, r.beatFraction, r.beatRateHz,
+          r.mergeWindowHz);
   fprintf(f, "  budget use   %d/%d (p90, %s)\n", r.probedSimultaneousP90, r.budget,
           r.budgetLimited ? "budget-limited" : "ladders exhausted");
 }

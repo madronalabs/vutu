@@ -41,9 +41,11 @@ struct AutoAnalyzerParams
   // spacings) has its window chosen first, wide enough to merge the beat
   // cluster, with resolution following as half the main lobe
   bool dense{false};
-  float beatFraction{0.f};   // peaky share of 15-80 Hz band-envelope modulation
-  float beatRateHz{0.f};     // p90 beat rate
-  float mergeWindowHz{0.f};  // minimum window width demanded by the beats
+  float beatIndexDb{-120.f};  // absolute beat-band modulation index of the
+                              // tonal band envelopes, dB
+  float beatFraction{0.f};    // beat-band share of all modulation from 2 Hz up
+  float beatRateHz{0.f};      // p90 beat rate
+  float mergeWindowHz{0.f};   // minimum window width demanded by the beats
 };
 
 // Estimate analysis parameters likely to produce a faithful reconstruction
