@@ -971,315 +971,6 @@ int synthTest(const char* path)
 }
 
 // ---------------------------------------------------------------------------
-// nelson-test: single-FFT reassignment via cross-spectral surfaces
-// (Fitz & Fulop eqs. 54-57, Nelson's method) vs the Auger-Flandrin
-// three-transform reference. Experiment for the real-time engine: if the
-// finite-difference estimates track the exact ones at peak bins, the
-// spectral stage needs one FFT per hop instead of three.
-
-struct Cand
-{
-  long bin;
-  float fsample;    // reassigned frequency in fractional bins
-  float timeCorr;   // samples
-};
-
-// the reassignment-minima scan of utuPeaks, on raw correction arrays
-std::vector<Cand> scanForPeaks(const float* freqCorr, const float* timeCorr, long n,
-                               float minFreqSample, float maxCorrSamples)
-{
-  std::vector<Cand> out;
-  const long endJ = (n / 2) - 2;
-  long startJ = 1;
-  float fsample;
-  do
-  {
-    fsample = startJ + freqCorr[startJ];
-    ++startJ;
-  } while ((fsample < minFreqSample) && (startJ < endJ));
-
-  for (long j = startJ; j < endJ; ++j)
-  {
-    const float nextFsample = (j + 1) + freqCorr[j + 1];
-    if ((fsample > j) && (nextFsample < j + 1))
-    {
-      float fs;
-      long peakIdx;
-      if ((fsample - j) < ((j + 1) - nextFsample))
-      {
-        fs = fsample;
-        peakIdx = j;
-      }
-      else
-      {
-        fs = nextFsample;
-        peakIdx = j + 1;
-      }
-      if ((fs >= minFreqSample) && (fabsf(timeCorr[peakIdx]) < maxCorrSamples))
-      {
-        out.push_back({peakIdx, fs, timeCorr[peakIdx]});
-      }
-    }
-    fsample = nextFsample;
-  }
-  return out;
-}
-
-int nelsonTest(const char* path)
-{
-  double sr = kSyntheticRate;
-  std::vector<float> samplesF;
-  if (std::string(path) == "@sine")
-  {
-    // ideal stationary case: theory says the cross-frame estimate is exact
-    samplesF.resize(long(5 * sr));
-    for (long i = 0; i < long(samplesF.size()); ++i)
-    {
-      samplesF[i] = 0.5f * sinf(2.f * float(kPi) * 440.1f * i / float(sr));
-    }
-  }
-  else
-  {
-    if (!loadAudio(path, samplesF, sr)) return 2;
-  }
-  const long nSamples = long(samplesF.size());
-  printf("%s: %ld samples at %g Hz\n", path, nSamples, sr);
-
-  const double resolutionHz = 80.;
-  const double widthHz = 160.;
-  const double sidelobeDb = 90.;
-  const double ampFloorDb = -90.;
-  const double freqFloorHz = resolutionHz;
-
-  ml::utu::ReassignedSpectrum spectrum;
-  spectrum.configure(ml::utu::buildReassignmentWindows(sr, widthHz, sidelobeDb));
-  const long n = spectrum.fftSize();
-  const long bins = spectrum.bins();
-  const long hopSamples = long((1. / widthHz) * sr);
-  const float sampsToHz = float(sr / n);
-  const float minFreqSample = float(freqFloorHz) / sampsToHz;
-  const float maxCorrSamples = float((1. / widthHz) * sr);  // cropTime·sr
-  printf("winlen %ld, fft %ld, hop %ld samples\n", spectrum.windowLength(), n, hopSamples);
-
-  // expected inter-frame rotation per bin: 2π·k·hop/N
-  std::vector<double> demodCos(bins), demodSin(bins);
-  for (long k = 0; k < bins; ++k)
-  {
-    const double dphi = 2. * kPi * k * hopSamples / n;
-    demodCos[k] = cos(dphi);
-    demodSin[k] = sin(dphi);
-  }
-
-  // ring of three frames of Xh (and the middle frame's reference data);
-  // the centered estimate for frame m uses frames m-1 and m+1
-  struct FrameData
-  {
-    std::vector<float> re, im;        // Xh at the frame center
-    std::vector<float> re1, im1;      // Xh one sample later (for dt=1 FD)
-    std::vector<float> afFc, afTc;    // Auger-Flandrin reference corrections
-    long centerSample{-1};
-  };
-  FrameData ring[3];
-  for (auto& f : ring)
-  {
-    f.re.resize(bins);
-    f.im.resize(bins);
-    f.re1.resize(bins);
-    f.im1.resize(bins);
-    f.afFc.resize(bins);
-    f.afTc.resize(bins);
-  }
-
-  // Nelson estimates for the middle frame: cross-frame at hop spacing
-  // (fwd/centered) and at one-sample spacing (dt = 1)
-  std::vector<float> nFcFwd(bins, 0.f), nFcCtr(bins, 0.f), nFcOne(bins, 0.f), nTc(bins, 0.f);
-
-  // error stats at AF kept-peak bins, bucketed by level below frame peak
-  struct Bucket
-  {
-    const char* name;
-    double maxFcFwd{0}, rmsFcFwd{0}, maxFcCtr{0}, rmsFcCtr{0}, maxFcOne{0}, rmsFcOne{0},
-        maxTc{0}, rmsTc{0};
-    long count{0};
-  };
-  Bucket buckets[3] = {{"  0..-40dB"}, {"-40..-60dB"}, {"-60..-90dB"}};
-  long wrapViolations = 0;
-
-  // candidate agreement among significant candidates (within 60 dB of the
-  // frame peak): floor-noise crossings differ between any two estimators and
-  // are thinned away regardless
-  long afKeptTotal = 0, nelsonKeptTotal = 0, matchedTotal = 0;
-  double maxMatchedFreqErrHz = 0.;
-
-  const float fcScale = float(n) / (2.f * float(kPi) * hopSamples);  // rad -> bins
-  const float fcScaleOne = float(n) / (2.f * float(kPi));            // rad over 1 sample -> bins
-  const float tcScale = float(n) / (4.f * float(kPi));               // rad over 2 bins -> samples
-  std::vector<double> demod1Cos(bins), demod1Sin(bins);
-  for (long k = 0; k < bins; ++k)
-  {
-    demod1Cos[k] = cos(2. * kPi * k / n);
-    demod1Sin[k] = sin(2. * kPi * k / n);
-  }
-
-  long frames = 0;
-  for (long center = 0; center + 0 < nSamples; center += hopSamples, ++frames)
-  {
-    FrameData& cur = ring[frames % 3];
-    spectrum.transform(samplesF.data(), nSamples, center);
-    std::copy_n(spectrum.frame().re.data(), bins, cur.re.data());
-    std::copy_n(spectrum.frame().im.data(), bins, cur.im.data());
-    std::copy_n(spectrum.frame().freqCorr.data(), bins, cur.afFc.data());
-    std::copy_n(spectrum.frame().timeCorr.data(), bins, cur.afTc.data());
-    cur.centerSample = center;
-
-    // second transform one sample later, for the dt = 1 estimate
-    if (center + 1 < nSamples)
-    {
-      spectrum.transform(samplesF.data(), nSamples, center + 1);
-      std::copy_n(spectrum.frame().re.data(), bins, cur.re1.data());
-      std::copy_n(spectrum.frame().im.data(), bins, cur.im1.data());
-    }
-
-    if (frames < 2) continue;
-    const FrameData& prev = ring[(frames - 2) % 3];  // m-1
-    const FrameData& mid = ring[(frames - 1) % 3];   // m, the frame under test
-    const FrameData& next = cur;                     // m+1
-
-    // Nelson estimates for frame m
-    for (long k = 1; k < bins - 1; ++k)
-    {
-      // forward cross-frame surface C = X_m·conj(X_{m-1}), demodulated
-      auto deviation = [&](const FrameData& a, const FrameData& b)
-      {
-        const double cr = double(a.re[k]) * b.re[k] + double(a.im[k]) * b.im[k];
-        const double ci = double(a.im[k]) * b.re[k] - double(a.re[k]) * b.im[k];
-        // rotate by conj of expected: (cr + j·ci)·(cos - j·sin)
-        const double dr = cr * demodCos[k] + ci * demodSin[k];
-        const double di = ci * demodCos[k] - cr * demodSin[k];
-        return atan2(di, dr);
-      };
-      const double thFwd = deviation(mid, prev);
-      const double thBwd = deviation(next, mid);
-      nFcFwd[k] = float(thFwd) * fcScale;
-      nFcCtr[k] = float(0.5 * (thFwd + thBwd)) * fcScale;
-      if (fabs(thFwd) > 0.9 * kPi) ++wrapViolations;
-
-      // dt = 1: cross X(t+1)·conj(X(t)), demodulated by one bin rotation
-      {
-        const double cr = double(mid.re1[k]) * mid.re[k] + double(mid.im1[k]) * mid.im[k];
-        const double ci = double(mid.im1[k]) * mid.re[k] - double(mid.re1[k]) * mid.im[k];
-        const double dr = cr * demod1Cos[k] + ci * demod1Sin[k];
-        const double di = ci * demod1Cos[k] - cr * demod1Sin[k];
-        nFcOne[k] = float(atan2(di, dr)) * fcScaleOne;
-      }
-
-      // adjacent-bin surface L = X[k+1]·conj(X[k-1]): time correction, no
-      // demodulation needed with zero-phase windowing
-      const double lr = double(mid.re[k + 1]) * mid.re[k - 1] + double(mid.im[k + 1]) * mid.im[k - 1];
-      const double li = double(mid.im[k + 1]) * mid.re[k - 1] - double(mid.re[k + 1]) * mid.im[k - 1];
-      nTc[k] = float(-atan2(li, lr)) * tcScale;
-    }
-
-    // frame peak level for bucketing
-    double framePeakSq = 0.;
-    for (long k = 0; k < bins; ++k)
-    {
-      framePeakSq = std::max(framePeakSq, double(mid.re[k]) * mid.re[k] + double(mid.im[k]) * mid.im[k]);
-    }
-    if (framePeakSq < 1e-14) continue;
-
-    // errors at the AF kept-peak bins
-    auto afCands = scanForPeaks(mid.afFc.data(), mid.afTc.data(), n, minFreqSample, maxCorrSamples);
-    for (const Cand& c : afCands)
-    {
-      const double magSq = double(mid.re[c.bin]) * mid.re[c.bin] + double(mid.im[c.bin]) * mid.im[c.bin];
-      const double db = 10. * log10(magSq / framePeakSq);
-      if (db < -90.) continue;
-      Bucket& b = (db > -40.) ? buckets[0] : (db > -60.) ? buckets[1] : buckets[2];
-      const double afFc = mid.afFc[c.bin];
-      const double eFwd = fabs(nFcFwd[c.bin] - afFc);
-      const double eCtr = fabs(nFcCtr[c.bin] - afFc);
-      const double eOne = fabs(nFcOne[c.bin] - afFc);
-      const double eTc = fabs(nTc[c.bin] - mid.afTc[c.bin]);
-      b.maxFcFwd = std::max(b.maxFcFwd, eFwd);
-      b.maxFcCtr = std::max(b.maxFcCtr, eCtr);
-      b.maxFcOne = std::max(b.maxFcOne, eOne);
-      b.maxTc = std::max(b.maxTc, eTc);
-      b.rmsFcFwd += eFwd * eFwd;
-      b.rmsFcCtr += eCtr * eCtr;
-      b.rmsFcOne += eOne * eOne;
-      b.rmsTc += eTc * eTc;
-      ++b.count;
-    }
-
-    // candidate agreement among significant candidates: scan the dt=1
-    // arrays and compare against the AF scan, both gated at -60 dB
-    auto significant = [&](const std::vector<Cand>& cands)
-    {
-      std::vector<Cand> out;
-      for (const Cand& c : cands)
-      {
-        const double magSq =
-            double(mid.re[c.bin]) * mid.re[c.bin] + double(mid.im[c.bin]) * mid.im[c.bin];
-        if (magSq > framePeakSq * 1e-6)
-        {
-          out.push_back(c);
-        }
-      }
-      return out;
-    };
-    auto afSig = significant(afCands);
-    auto nCands = significant(scanForPeaks(nFcOne.data(), nTc.data(), n, minFreqSample, maxCorrSamples));
-    afKeptTotal += long(afSig.size());
-    nelsonKeptTotal += long(nCands.size());
-    // same peak = candidate bins within one bin of each other
-    size_t a = 0, bIdx = 0;
-    while (a < afSig.size() && bIdx < nCands.size())
-    {
-      if (labs(afSig[a].bin - nCands[bIdx].bin) <= 1)
-      {
-        ++matchedTotal;
-        const double dF = fabs(afSig[a].fsample - nCands[bIdx].fsample) * sampsToHz;
-        maxMatchedFreqErrHz = std::max(maxMatchedFreqErrHz, dF);
-        ++a;
-        ++bIdx;
-      }
-      else if (afSig[a].bin < nCands[bIdx].bin)
-        ++a;
-      else
-        ++bIdx;
-    }
-  }
-
-  printf("%ld frames; hop-spaced wrap violations (|dev| > 0.9π): %ld\n", frames,
-         wrapViolations);
-  printf("freq err in bins vs Auger-Flandrin at AF peak bins; time err in samples:\n");
-  printf("%-11s %9s %9s %9s %9s %9s %9s %8s\n", "bucket", "fcCtrRms", "fcCtrMax", "fcOneRms",
-         "fcOneMax", "tcRms", "tcMax", "peaks");
-  for (Bucket& b : buckets)
-  {
-    const double inv = 1. / std::max(1L, b.count);
-    printf("%-11s %9.3g %9.3g %9.3g %9.3g %9.3g %9.3g %8ld\n", b.name, sqrt(b.rmsFcCtr * inv),
-           b.maxFcCtr, sqrt(b.rmsFcOne * inv), b.maxFcOne, sqrt(b.rmsTc * inv), b.maxTc,
-           b.count);
-  }
-  const double unmatched = 1. - double(matchedTotal) / std::max(1L, afKeptTotal);
-  printf("significant candidates (>-60 dB): %ld AF, %ld dt=1 Nelson, matched %ld"
-         " (unmatched %.3g%%), max matched dF %.3g Hz\n",
-         afKeptTotal, nelsonKeptTotal, matchedTotal, 100. * unmatched, maxMatchedFreqErrHz);
-
-  // gates on the dt=1 estimator: near-peak corrections must track closely
-  // in the RMS sense (single-frame outliers at transients are absorbed by
-  // tracking and phase fixing) and the significant candidate sets must be
-  // essentially identical
-  const double inv0 = 1. / std::max(1L, buckets[0].count);
-  const bool pass = (sqrt(buckets[0].rmsFcOne * inv0) < 0.02) &&
-                    (sqrt(buckets[0].rmsTc * inv0) < 5.) && (unmatched < 0.03);
-  printf("nelson-test: %s\n", pass ? "PASS" : "FAIL");
-  return pass ? 0 : 1;
-}
-
-// ---------------------------------------------------------------------------
 // auto-test: automatic analysis-parameter estimation
 
 // synthetic test signals exercising the classifier branches
@@ -1553,15 +1244,11 @@ int tuneCmd(const char* path, int budget)
   auto gDrift = [](ml::utu::AnalyzerParams& a) { return &a.freqDrift; };
   auto gRes = [](ml::utu::AnalyzerParams& a) { return &a.resolution; };
   auto gFloor = [](ml::utu::AnalyzerParams& a) { return &a.ampFloor; };
-  auto gJitter = [](ml::utu::AnalyzerParams& a) { return &a.hopJitter; };
-  auto gScale = [](ml::utu::AnalyzerParams& a) { return &a.driftTransientScale; };
   Knob knobs[] = {
       {"windowWidth", 16.f, 768.f, true, 1.3f, gWidth},
       {"freqDrift", 2.f, 80.f, true, 2.f, gDrift},
       {"resolution", 8.f, 1024.f, true, 1.3f, gRes},
       {"ampFloor", -90.f, -20.f, false, 9.f, gFloor},
-      {"hopJitter", 0.f, 0.5f, false, 0.15f, gJitter},
-      {"driftTransientScale", 1.f, 8.f, true, 2.f, gScale},
   };
 
   const int sweeps = 2;
@@ -1608,19 +1295,6 @@ int tuneCmd(const char* path, int budget)
   }
 
   ml::utu::ReconstructionScore tunedScore;
-  // booleans don't bracket: try onsetSnap once at the tuned settings
-  {
-    ml::utu::AnalyzerParams trial = p;
-    trial.onsetSnap = true;
-    const float s = evalParams(src, sr, trial, hiCut, budget);
-    if (s < best)
-    {
-      p = trial;
-      best = s;
-      printf("  onsetSnap -> on (total %.2f)\n", best);
-    }
-  }
-
   size_t tunedMaxActive = 0;
   evalParams(src, sr, p, hiCut, budget, &tunedScore, &tunedMaxActive);
   printf("tuned params (deltas from auto), maxActive %zu / budget %d:\n", tunedMaxActive,
@@ -1691,11 +1365,14 @@ int convertDir(const char* dirPath, int budget)
                    [](unsigned char ch) { return char(std::tolower(ch)); });
     if ((ext != ".aif") && (ext != ".aiff") && (ext != ".wav")) continue;
     const std::string stem = entry.path().stem().string();
-    const std::string tag = "-converted";
-    if ((stem.size() >= tag.size()) &&
-        (stem.compare(stem.size() - tag.size(), tag.size(), tag) == 0))
+    auto endsWith = [&stem](const char* tag)
     {
-      continue;  // output of a previous run
+      const size_t n = strlen(tag);
+      return (stem.size() >= n) && (stem.compare(stem.size() - n, n, tag) == 0);
+    };
+    if (endsWith("-converted") || endsWith("-tuned"))
+    {
+      continue;  // derived outputs, not sources
     }
     files.push_back(entry.path());
   }
@@ -1813,7 +1490,6 @@ int main(int argc, char** argv)
         "  bandwidth-test <aiff>  peaks + residue bandwidth association vs Loris\n"
         "  analyze-test <aiff>    full analysis + phase fix vs Loris::Analyzer\n"
         "  synth-test [aiff]      bandwidth-enhanced synthesis vs Loris::Synthesizer\n"
-        "  nelson-test <aiff>     single-FFT cross-spectral reassignment vs Auger-Flandrin\n"
         "  auto-test <aiff|@sine|@harm|@bell|@noise>  automatic analysis parameters\n"
         "  convert-dir <dir> [budget]   auto-analyze + resynthesize every audio file\n"
         "  score <src> <render>         reconstruction metrics\n"
@@ -1821,7 +1497,6 @@ int main(int argc, char** argv)
     return 2;
   }
   const std::string cmd(argv[1]);
-  if (cmd == "nelson-test" && argc > 2) return nelsonTest(argv[2]);
   if (cmd == "auto-test" && argc > 2) return autoTest(argv[2]);
   if (cmd == "convert-dir" && argc > 2)
     return convertDir(argv[2], argc > 3 ? atoi(argv[3]) : 64);

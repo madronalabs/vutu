@@ -684,6 +684,13 @@ struct ProbeData
 // filter of this one, and the whole floor/cut ladder can be evaluated
 // without further DSP. The probe floor sits below the analyzer range so
 // thinPeaks' 10 dB fade zone cannot distort stored amplitudes above -90 dB.
+//
+// Only *persistent* peaks — those matched to the previous frame — are
+// stored for budget counting: one-frame blips (dense/transient material is
+// full of them) become one-breakpoint partials that cleanOutliers deletes,
+// so counting them makes the probe overestimate the achieved simultaneous
+// count and the quality walk over-raises the amplitude floor. (Measured on
+// a dense mix: raw probe p90 57 vs 23 partials actually achieved.)
 ProbeData probeFrames(const Ctx& c, const AnalyzerParams& p)
 {
   ProbeData d;
@@ -719,27 +726,34 @@ ProbeData probeFrames(const Ctx& c, const AnalyzerParams& p)
       std::sort(kept.begin(), kept.end(), [](const ProbePeakData& a, const ProbePeakData& b)
                 { return a.freq < b.freq; });
 
-      // per-hop frequency movement of strong peaks (drives freqDrift)
-      size_t a = 0, b = 0;
-      while (a < prev.size() && b < kept.size())
+      // match against the previous frame: persistent peaks enter the
+      // budget counts; strong matched pairs drive freqDrift
+      if (j > 0)
       {
-        const float df = kept[b].freq - prev[a].freq;
-        if (fabsf(df) < 0.5f * p.resolution)
+        std::vector<ProbePeakData> persistent;
+        persistent.reserve(kept.size());
+        size_t a = 0, b = 0;
+        while (a < prev.size() && b < kept.size())
         {
-          if ((prev[a].amp > strongAmp) && (kept[b].amp > strongAmp))
+          const float df = kept[b].freq - prev[a].freq;
+          if (fabsf(df) < 0.5f * p.resolution)
           {
-            d.hopDeltas.push_back(fabsf(df));
+            if ((prev[a].amp > strongAmp) && (kept[b].amp > strongAmp))
+            {
+              d.hopDeltas.push_back(fabsf(df));
+            }
+            persistent.push_back(kept[b]);
+            ++a;
+            ++b;
           }
-          ++a;
-          ++b;
+          else if (df > 0)
+            ++a;
+          else
+            ++b;
         }
-        else if (df > 0)
-          ++a;
-        else
-          ++b;
+        d.frames.push_back(std::move(persistent));
       }
-      prev = kept;
-      d.frames.push_back(std::move(kept));
+      prev = std::move(kept);
     }
   }
   return d;

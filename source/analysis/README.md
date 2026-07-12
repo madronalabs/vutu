@@ -125,15 +125,34 @@ Budget-constrained tune results (start = auto params):
 - gambang (inharmonic percussive): total −10%; wanted a longer window and
   *half* the auto drift; transient deficit barely moved (attack smear
   needs a structural fix, not parameters).
-- `driftTransientScale` ≈ 1.5–2 helped both sounds (small, consistent).
+- `driftTransientScale` ≈ 1.5–2 helped both sounds by the metric (small).
   `hopJitter` and `onsetSnap` measured no improvement on either — the
   frame-rate-coherence theory is not the dominant artifact here yet;
   retest after tracking improves.
 
-Next-round candidates, in order: (1) probe→actual budget calibration in
-the quality walk; (2) **predictive tracking** (per-track frequency
-extrapolation + small gate, plus amp/phase continuity costs) — the
-remaining wateriness and both drift corrections point straight at track
-instability; (3) drift estimator robustness (censoring-aware); (4)
-transient handling for percussive attacks (short-window band or
-onset-locked analysis) — parameters alone did not fix the gambang.
+**Ear verdicts (2026-07-12)**: Careless-tuned clearly better than
+-converted — the tuned direction is real. gambang-tuned WORSE than
+-converted: obvious crunching where mallet decays should ring. The metric
+missed it — its blind spot is gating/track-fragmentation crackle in
+decays (raised floor cutting tails in and out; drift lowered enough to
+fragment ringing tracks). A **decay-continuity** component (dropout/
+fragmentation detector on decaying segments) is needed before tune can be
+trusted on percussive material.
+
+Cleanup (2026-07-12): the experimental knobs (hopJitter, onsetSnap,
+driftTransientScale + the analyzer's transient detector) and the
+concluded nelson-test harness are removed — two null results and one ear
+veto. The tracker's per-frame drift argument stays for the predictive-
+tracking round. The transferable Careless lesson is kept as the
+**persistent-peak probe calibration**: budget counts now include only
+peaks matched across consecutive probe frames, since one-frame blips
+become one-breakpoint partials that cleanOutliers deletes (raw probe p90
+57 vs 23 achieved on the dense mix — the walk was over-raising the floor).
+
+Next-round candidates, in order: (1) decay-continuity metric component
+(prerequisite for trusting tune on percussive sounds); (2) **predictive
+tracking** (per-track frequency extrapolation + small gate, plus
+amp/phase continuity costs) — the remaining wateriness and both drift
+corrections point straight at track instability; (3) drift estimator
+robustness (censoring-aware); (4) transient handling for percussive
+attacks (short-window band or onset-locked analysis).

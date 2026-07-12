@@ -37,20 +37,6 @@ struct AnalyzerParams
   float cropTime{0.f};          // s; 0 -> hopTime
   float bwRegionWidth{2000.f};  // Hz; 0 disables residue bandwidth
   bool phaseCorrect{true};
-
-  // experimental variants, all off by default
-  float hopJitter{0.f};           // 0..0.5: randomize each hop by ±this
-                                  // fraction. Estimation error is coherent at
-                                  // the frame rate (every partial jitters in
-                                  // step, putting pitched sidebands around
-                                  // every component); dithering the hop
-                                  // decorrelates it into broadband noise
-  float driftTransientScale{1.f}; // >1: widen freqDrift by up to this factor
-                                  // at transients (follow glides and chaotic
-                                  // onsets), lock to the base drift during
-                                  // sustains (no neighbor capture)
-  bool onsetSnap{false};          // place a frame center on each detected
-                                  // onset so every attack gets a breakpoint
 };
 
 // The analyzer: reassigned spectrum -> peaks -> thinning -> bandwidth
@@ -78,8 +64,6 @@ class PartialAnalyzer
 
  private:
   void processHop();
-  void detectTransients(const float* src, size_t n);
-  float transientLevelAt(int64_t sample) const;
 
   AnalyzerParams _params;  // with derived fields resolved
   ReassignedSpectrum _spectrum;
@@ -93,18 +77,6 @@ class PartialAnalyzer
   int64_t _frameSample{0};    // center of the next frame, in samples from input start
   int64_t _samplesPushed{0};
   bool _configured{false};
-
-  // causal 2 ms block-RMS transient detector (drives driftTransientScale
-  // and onsetSnap); rises indexed by absolute block in a small ring
-  static constexpr size_t kRiseRing = 4096;
-  size_t _envBlockSize{88};
-  double _envAcc{0.};
-  size_t _envAccCount{0};
-  int64_t _envBlock{0};
-  float _prevBlockDb{-160.f};
-  std::vector<float> _blockRise;  // dB per ms
-  int64_t _snapTarget{-1};
-  uint32_t _rng{0x9E3779B9u};
 };
 
 // offline convenience wrapper
