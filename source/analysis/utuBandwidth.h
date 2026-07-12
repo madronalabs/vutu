@@ -11,12 +11,14 @@
 namespace ml::utu
 {
 
-// Port of Loris AssociateBandwidth: residue spectral energy — energy in
-// rejected peaks — is collected into overlapping frequency regions and
-// redistributed to the kept peaks as noise (bandwidth) energy, weighted by
-// peak amplitude. Regions are regionWidth Hz wide with centers spaced at
-// half that; a frame's few dozen regions and few hundred peaks make this
-// scalar work.
+// Port of Loris AssociateBandwidth, the noise half of the reassigned
+// bandwidth-enhanced additive model (Fitz & Haken; Fitz & Fulop Sec. 8):
+// residue spectral energy — energy in rejected peaks — is collected into
+// overlapping frequency regions and redistributed to the kept peaks as noise
+// (bandwidth) energy, weighted by peak amplitude, so the synthesizer can
+// reproduce it as noise modulation instead of dropping it. Regions are
+// regionWidth Hz wide with centers spaced at half that; a frame's few dozen
+// regions and few hundred peaks make this scalar work.
 class AssociateBandwidth
 {
  public:

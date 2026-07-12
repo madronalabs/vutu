@@ -30,7 +30,11 @@ constexpr float kModGain = 11.11f;
 // One linear segment of a partial's rendering schedule. phi0 is the carrier
 // phase at s0, precomputed in double following Loris Oscillator/Synthesizer:
 // anchored to the stored breakpoint phase where the amplitude leaves zero,
-// continuous (midpoint-frequency integration) elsewhere.
+// continuous (midpoint-frequency integration) elsewhere. Anchoring only at
+// zero-amplitude points is the phase-correct rendering discipline of Fitz &
+// Fulop Sec. 8: within a partial the oscillator integrates the (phase-fixed)
+// frequency envelope, which lands on the stored phases by construction;
+// hard phase resets are audible and so are reserved for silent points.
 struct Segment
 {
   int64_t s0{0}, s1{0};  // samples

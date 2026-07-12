@@ -27,11 +27,25 @@ void buildTimeDerivativeWindow(std::vector<double>& win, double shape);
 
 }  // namespace kaiser
 
-// The three scaled analysis windows used by the reassigned spectrum, matching
-// Loris ReassignedSpectrum::buildReassignmentWindows: the main window scaled
-// so reported magnitudes are correct, the time-derivative window scaled so
-// frequency corrections come out in fractional bins, and the time-ramped
-// window giving time corrections in samples.
+// The three analysis windows of Auger-Flandrin reassignment (Fitz & Fulop,
+// "A Unified Theory of Time-Frequency Reassignment", Sec. 6.2): the window h
+// itself, its time derivative hD = dh/dt used for frequency reassignment
+// (eq. 65), and the time-ramped window hT = t·h used for time reassignment
+// (eq. 64). Scaling, matching Loris ReassignedSpectrum:
+//
+//   w         = (2/winsum)·h            so |X| at a resolved peak reads
+//                                       directly as sinusoid amplitude
+//                                       (2 = analytic-signal factor)
+//   wFreqRamp = (length/(winsum·π))·hD  relative to w this is hD·length/2π,
+//                                       half of the rad/sample -> fractional
+//                                       bin conversion; the spectrum kernel
+//                                       supplies the other half, N/length
+//   wTimeRamp = w·(k − center)          ramp in samples, so the time
+//                                       correction comes out in samples with
+//                                       no further scaling
+//
+// hD is analytic (d/dx I0 = I1), so the FFT-based construction of eq. 70 is
+// unnecessary.
 struct ReassignmentWindows
 {
   long length{0};  // always odd

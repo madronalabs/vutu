@@ -26,16 +26,22 @@ struct SpectrumFrame
   std::vector<float> dRe, dIm;  // Xd:  x·wFreqRamp
   std::vector<float> tRe, tIm;  // Xt:  x·wTimeRamp
 
-  // per-bin reassignment data
-  std::vector<float> magSq;     // |Xh|²
-  std::vector<float> freqCorr;  // fractional bins
-  std::vector<float> timeCorr;  // samples
+  // per-bin reassignment data: how far the local center of gravity of the
+  // energy sits from this bin's nominal time-frequency coordinate
+  std::vector<float> magSq;     // |Xh|², the spectrogram value (eq. 1)
+  std::vector<float> freqCorr;  // ω̂ − ω in fractional bins (eq. 65)
+  std::vector<float> timeCorr;  // t̂ − t in samples (eq. 64)
 };
 
 // Time-frequency reassigned short-time spectrum, replacing Loris
-// ReassignedSpectrum. Uses three real FFTs per hop instead of Loris's two
-// complex ones; the mixed-derivative (convergence) spectrum is not computed
-// since residue bandwidth association always overwrites it.
+// ReassignedSpectrum. Each hop computes the three transforms of the
+// Auger-Flandrin method (Fitz & Fulop Sec. 6.2): Xh over the window, Xd over
+// its time derivative, Xt over the time-ramped window. Reassignment then
+// needs no phase derivatives, only per-bin algebra on these three spectra
+// (eqs. 64-65). All windows are real, so three real FFTs replace Loris's two
+// complex ones; the mixed-derivative spectrum (x·t·dh/dt, eq. 110, Loris
+// "convergence") is not computed since residue bandwidth association always
+// overwrites it.
 class ReassignedSpectrum
 {
  public:

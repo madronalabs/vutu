@@ -68,6 +68,15 @@ void ReassignedSpectrum::fillWindowed(const float* src, long begin, long count, 
   }
 }
 
+// One hop of the moving-window transform (Fitz & Fulop eq. 5): the window is
+// aligned with sampCenter and the windowed input is rotated so the window
+// center lands at index 0. The rotation makes the FFT report phase relative
+// to the frame center — the STFT phase convention of eq. 3, in which a
+// steady sinusoid's phase is stationary from frame to frame — rather than
+// the moving-window convention of eq. 5, whose phases rotate at ω (eq. 13).
+// Rotating the time-domain input costs nothing here (the windowed segments
+// are simply written at their post-rotation positions), where the same fixup
+// in the frequency domain would cost a complex multiply per bin.
 void ReassignedSpectrum::transform(const float* src, long srcLength, long sampCenter)
 {
   assert(_fft);
@@ -96,12 +105,28 @@ void ReassignedSpectrum::transform(const float* src, long srcLength, long sampCe
     _fft->forward(_input.data(), p.re, p.im);
   }
 
-  // per-bin reassignment kernels, 4 bins at a time:
+  // Per-bin reassignment kernels, 4 bins at a time. These are the efficient
+  // spectrogram reassignment operators of Fitz & Fulop Sec. 6.2, with the
+  // phase derivatives eliminated in favor of cross-spectral products:
+  //
+  //   freqCorr:  ω̂ − ω = ∂φ/∂t = Im{Xd·conj(Xh)}/|Xh|²   (eq. 65)
+  //   timeCorr:  t̂ − t = −∂φ/∂ω = Re{Xt·conj(Xh)}/|Xh|²  (eq. 64)
+  //
+  // expanded into real arithmetic:
   //   magSq    = |Xh|²
   //   freqCorr = -(N/winlen)·(Xh.re·Xd.im − Xh.im·Xd.re) / |Xh|²
   //   timeCorr = (Xh.re·Xt.re + Xh.im·Xt.im) / |Xh|²
-  // |Xh|² is clamped away from zero: garbage corrections in spectral-floor
-  // bins only produce candidates that the amplitude threshold rejects.
+  //
+  // Signs relative to the paper follow from applying the window as h(τ−t)
+  // (window slid along the signal) rather than h(t−τ), which negates the
+  // derivative window's contribution. The N/winlen factor completes the
+  // rad/sample -> fractional-bin conversion begun in the window scaling
+  // (see ReassignmentWindows); the time ramp is already in samples.
+  //
+  // |Xh|² is clamped away from zero: reassignment is meaningless where there
+  // is no energy to reassign (the paper's zero-valued-distribution caveat),
+  // and garbage corrections in spectral-floor bins only produce candidates
+  // that the amplitude threshold rejects.
   const float4 vNegOversampling(-_oversampling);
   const float4 vFloor(1e-30f);
   const size_t padded = f.re.size();
@@ -145,6 +170,14 @@ float ReassignedSpectrum::rawPhaseAt(long idx) const
   return atan2f(-_frame.im[mirror], _frame.re[mirror]);
 }
 
+// Phase correction for phase-correct additive modeling, Fitz & Fulop Sec. 8.
+// The STFT filters are linear phase across their passbands, so the phase at
+// the reassigned frequency (rather than the bin center) is recovered by
+// linear interpolation of the discrete phase spectrum toward the neighbor
+// bin in the direction of the frequency correction. Then, because the data
+// is attributed to the reassigned time t̂ rather than the frame center t, the
+// phase is advanced by the travel of the reassigned frequency over that
+// interval: ω̂·(t̂ − t), here (idx + freqCorr)·(2π/N)·timeCorr.
 float ReassignedSpectrum::phaseAt(long idx) const
 {
   assert((idx >= 0) && (idx < _frame.bins));
@@ -152,8 +185,6 @@ float ReassignedSpectrum::phaseAt(long idx) const
   const float offsetTime = _frame.timeCorr[idx];
   const float offsetFreq = _frame.freqCorr[idx];
 
-  // phase is locally linear; interpolate toward the neighbor bin in the
-  // direction of the frequency correction
   if (offsetFreq > 0)
   {
     const float slope = rawPhaseAt(idx + 1) - phase;
@@ -165,7 +196,6 @@ float ReassignedSpectrum::phaseAt(long idx) const
     phase += offsetFreq * slope;
   }
 
-  // shift phase to the reassigned time
   const float fracFreqSample = idx + offsetFreq;
   phase += offsetTime * fracFreqSample * kTwoPiF / _frame.fftSize;
 

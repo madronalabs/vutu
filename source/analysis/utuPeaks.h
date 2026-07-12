@@ -30,9 +30,16 @@ struct PeakFrame
                       // as noise for bandwidth association
 };
 
-// Port of Loris SpectralPeakSelector::selectReassignmentMinima: emit a peak
-// wherever the frequency reassignment crosses from positive to negative
-// correction, rejecting peaks below minFreq or with large time corrections.
+// Port of Loris SpectralPeakSelector::selectReassignmentMinima. Near a
+// dominant component, all nearby bins reassign to approximately the same
+// frequency (the "consensus" regions of Fitz & Fulop Fig. 3): the map from
+// bin frequency to reassigned frequency flattens, and crosses the identity
+// at the component itself. Emitting a peak wherever the correction crosses
+// from positive to negative finds those crossings — one estimate per
+// component, at the bin needing the least correction. Peaks with large time
+// corrections are rejected (Sec. 7): a large reassignment means the energy
+// is poorly represented by this window position and will be better
+// represented in a neighboring frame.
 class PeakSelector
 {
  public:

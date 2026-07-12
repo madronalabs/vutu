@@ -18,6 +18,12 @@ namespace ml::utu
 
 // Analysis parameters, mirroring Loris Analyzer::configure: a zero means
 // "derive the Loris default from resolution / windowWidth / ampFloor".
+//
+// resolution and windowWidth are the separability choices of Fitz & Fulop
+// Sec. 5: components closer in frequency than the window's main lobe
+// (windowWidth), or events closer in time than the window length, cannot be
+// resolved — by reassignment or by anything else. The hop of 1/windowWidth
+// then critically samples the analysis in time.
 struct AnalyzerParams
 {
   float sampleRate{48000.f};
