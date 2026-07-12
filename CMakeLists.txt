@@ -9,7 +9,7 @@
 # Windows:
 # cmake -G"Visual Studio 14 2015 Win64" ..
 
-cmake_minimum_required (VERSION 3.5)
+cmake_minimum_required (VERSION 3.10)
 
 IF(APPLE)
   SET(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Build architectures for Mac OS X" FORCE)
@@ -206,6 +206,9 @@ file(GLOB ANALYSIS_INCLUDES "${CMAKE_SOURCE_DIR}/source/analysis/*.h")
 
 list(APPEND app_sources ${COMMON_SOURCES} ${WIDGETS_SOURCES} ${ANALYSIS_SOURCES} )
 list(APPEND app_sources ${COMMON_INCLUDES} ${WIDGETS_INCLUDES} ${ANALYSIS_INCLUDES} )
+
+# group the utu analysis/synthesis sources for browsing in the IDE
+source_group("analysis" FILES ${ANALYSIS_SOURCES} ${ANALYSIS_INCLUDES})
 
 if(APPLE)
 elseif(WIN32)
