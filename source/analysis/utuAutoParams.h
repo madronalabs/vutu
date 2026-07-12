@@ -32,6 +32,9 @@ struct AutoAnalyzerParams
   float minSpacingHz{0.f};        // 10th-percentile adjacent peak spacing
   float frameRateHz{0.f};         // actual frame rate after hop truncation
   int probedSimultaneousP90{0};   // p90 kept peaks per frame at final params
+  int budget{0};                  // the requested simultaneous-partial budget
+  bool budgetLimited{false};      // true: quality ascent stopped at the budget;
+                                  // false: every quality ladder was exhausted
   float activeDuration{0.f};      // seconds of non-silent material measured
 };
 

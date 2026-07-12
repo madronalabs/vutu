@@ -50,18 +50,6 @@ float percentile(std::vector<float> v, float p)
   return v[idx];
 }
 
-// IEC A-weighting in dB: one standard closed-form loudness proxy, used to
-// rank peaks so the partial budget is not spent on inaudible rumble
-double aWeightDb(double f)
-{
-  const double f2 = f * f;
-  const double num = 12194.0 * 12194.0 * f2 * f2;
-  const double den = (f2 + 20.6 * 20.6) *
-                     sqrt((f2 + 107.7 * 107.7) * (f2 + 737.9 * 737.9)) *
-                     (f2 + 12194.0 * 12194.0);
-  return 20. * log10(num / den) + 2.0;
-}
-
 // autocorrelation of x via FFT; result r[lag] for lag in [0, x.size())
 std::vector<float> autocorrelate(const std::vector<float>& x)
 {
@@ -569,22 +557,10 @@ void stage2(Ctx& c)
 // ---------------------------------------------------------------------------
 // stage 3: resolution and window width with anti-aliasing guard
 
-void stage3(Ctx& c, AnalyzerParams& p)
+// derive the window width for a given resolution (called again whenever the
+// quality ladder changes resolution)
+float deriveWindowWidth(const Ctx& c, float resolution)
 {
-  if (c.unpitched)
-  {
-    // spread the partial budget across the occupied band: kept-peak density
-    // after ±resolution masking is about one track per 1.25·resolution
-    const float band = std::max(200.f, c.hiCut - c.loCut);
-    p.resolution = clampf(band / (0.8f * c.budget), kResolutionLo, kResolutionHi);
-  }
-  else
-  {
-    // 0.8: the masking radius must sit below the smallest real spacing,
-    // with headroom for inharmonic stretch and vibrato excursion
-    p.resolution = clampf(0.8f * c.spacingMin, kResolutionLo, kResolutionHi);
-  }
-
   // absolute frame-rate cap, independent of resolution: linear
   // interpolation of a sampled envelope at modulation rate r has peak error
   // ≈ (π·r/F)²/2, ≤14% at F = 6r. Modulation faster than the cap belongs to
@@ -595,7 +571,7 @@ void stage3(Ctx& c, AnalyzerParams& p)
   // at least ~3 window lengths within the sound (window length ≈ 8/W s)
   const float wFloor = std::max(kWidthLo, float(24. / std::max(0.05, c.activeDuration)));
 
-  float w = std::min({2.f * p.resolution, fMax, kWidthHi});
+  float w = std::min({2.f * resolution, fMax, kWidthHi});
   w = std::max(w, wFloor);
 
   // anti-beating guard. The frame rate F samples every partial's envelopes;
@@ -637,7 +613,7 @@ void stage3(Ctx& c, AnalyzerParams& p)
     // relative to w rather than to resolution because the frame-rate cap
     // can bind below 2·resolution; downward moves are always safe against
     // the cap, upward moves must respect it
-    const float lo = std::max({wFloor, kWidthLo, 0.75f * w, 1.05f * p.resolution});
+    const float lo = std::max({wFloor, kWidthLo, 0.75f * w, 1.05f * resolution});
     const float hi = std::min({kWidthHi, fMax, 1.25f * w});
     bool fixed = false;
     for (float step = 0.02f * w; !fixed && (step <= 0.25f * w); step += 0.02f * w)
@@ -654,7 +630,32 @@ void stage3(Ctx& c, AnalyzerParams& p)
     }
   }
 
-  p.windowWidth = clampf(w, kWidthLo, kWidthHi);
+  return clampf(w, kWidthLo, kWidthHi);
+}
+
+void applyResolution(const Ctx& c, AnalyzerParams& p, float resolution)
+{
+  p.resolution = clampf(resolution, kResolutionLo, kResolutionHi);
+  p.windowWidth = deriveWindowWidth(c, p.resolution);
+}
+
+void stage3(Ctx& c, AnalyzerParams& p)
+{
+  float res;
+  if (c.unpitched)
+  {
+    // spread the partial budget across the occupied band: kept-peak density
+    // after ±resolution masking is about one track per 1.25·resolution
+    const float band = std::max(200.f, c.hiCut - c.loCut);
+    res = band / (0.8f * c.budget);
+  }
+  else
+  {
+    // 0.8: the masking radius must sit below the smallest real spacing,
+    // with headroom for inharmonic stretch and vibrato excursion
+    res = 0.8f * c.spacingMin;
+  }
+  applyResolution(c, p, res);
   p.freqFloor = c.loCut;
   p.ampFloor = c.ampFloorV1;
   p.sidelobeLevel = 90.f;  // never coupled to ampFloor: budget-driven floor
@@ -662,26 +663,42 @@ void stage3(Ctx& c, AnalyzerParams& p)
 }
 
 // ---------------------------------------------------------------------------
-// stages 4+5: probe pass with the real analyzer front end; drift and budget
+// stages 4+5: probe pass with the real analyzer front end, then a quality
+// walk that spends the partial budget
 
-void probeAndBudget(Ctx& c, AnalyzerParams& p, float& hiCutInOut, int& p90out)
+struct ProbePeakData
 {
+  float freq, amp;
+};
+
+struct ProbeData
+{
+  std::vector<std::vector<ProbePeakData>> frames;  // kept peaks per frame, freq-ascending
+  std::vector<float> hopDeltas;                    // |Δf| of strong peaks matched hop-to-hop
+};
+
+// One probe pass at the given resolution/window, taken at the most
+// permissive floor and cuts. ampFloor/loCut/hiCut don't change the spectrum
+// or the masking structure — masking only ever comes from louder peaks,
+// which survive any floor — so the kept set at any real settings is a pure
+// filter of this one, and the whole floor/cut ladder can be evaluated
+// without further DSP. The probe floor sits below the analyzer range so
+// thinPeaks' 10 dB fade zone cannot distort stored amplitudes above -90 dB.
+ProbeData probeFrames(const Ctx& c, const AnalyzerParams& p)
+{
+  ProbeData d;
   ReassignedSpectrum spectrum;
   spectrum.configure(buildReassignmentWindows(c.sr, p.windowWidth, p.sidelobeLevel));
   PeakSelector selector;
   const long hopSamples = std::max(1L, long(c.sr / p.windowWidth));
-  const float hopSec = float(hopSamples / c.sr);
-  selector.configure(float(c.sr), hopSec);  // cropTime = hopTime, the default
+  selector.configure(float(c.sr), float(hopSamples / c.sr));  // cropTime = hopTime
 
-  const int framesPerSite = 5;
-  std::vector<int> counts;
-  std::vector<float> hopDeltas;  // |Δf| between matched strong peaks
-  struct ProbePeak { float freq, amp; };
-  std::vector<std::vector<ProbePeak>> frames;  // all kept peaks, all frames
-
+  const float permissiveFloor = -100.f;
   const float strongAmp = powf(10.f, (c.ampFloorV1 + 20.f) / 20.f);
+  const int framesPerSite = 5;
+
   PeakFrame frame;
-  std::vector<ProbePeak> prev;
+  std::vector<ProbePeakData> prev;
   for (size_t site : c.probeSites)
   {
     prev.clear();
@@ -690,25 +707,19 @@ void probeAndBudget(Ctx& c, AnalyzerParams& p, float& hiCutInOut, int& p90out)
       const long center = long(site) + j * hopSamples;
       if ((center < 0) || (size_t(center) >= c.n)) break;
       spectrum.transform(c.x, long(c.n), center);
-      selector.selectPeaks(spectrum, c.loCut, frame);
-      thinPeaks(frame, p.resolution, p.ampFloor, center / c.sr);
+      selector.selectPeaks(spectrum, kLoCutLo, frame);
+      thinPeaks(frame, p.resolution, permissiveFloor, center / c.sr);
 
-      std::vector<ProbePeak> kept;
+      std::vector<ProbePeakData> kept;
+      kept.reserve(frame.numKept);
       for (size_t i = 0; i < frame.numKept; ++i)
       {
-        const Peak& pk = frame.peaks[i];
-        if ((pk.freq >= c.loCut) && (pk.freq <= hiCutInOut))
-        {
-          kept.push_back({pk.freq, pk.amp});
-        }
+        kept.push_back({frame.peaks[i].freq, frame.peaks[i].amp});
       }
-      std::sort(kept.begin(), kept.end(),
-                [](const ProbePeak& a, const ProbePeak& b) { return a.freq < b.freq; });
-      counts.push_back(int(kept.size()));
-      frames.push_back(kept);
+      std::sort(kept.begin(), kept.end(), [](const ProbePeakData& a, const ProbePeakData& b)
+                { return a.freq < b.freq; });
 
-      // per-hop frequency movement of strong peaks, matched to the previous
-      // frame within half a resolution
+      // per-hop frequency movement of strong peaks (drives freqDrift)
       size_t a = 0, b = 0;
       while (a < prev.size() && b < kept.size())
       {
@@ -717,7 +728,7 @@ void probeAndBudget(Ctx& c, AnalyzerParams& p, float& hiCutInOut, int& p90out)
         {
           if ((prev[a].amp > strongAmp) && (kept[b].amp > strongAmp))
           {
-            hopDeltas.push_back(fabsf(df));
+            d.hopDeltas.push_back(fabsf(df));
           }
           ++a;
           ++b;
@@ -727,16 +738,173 @@ void probeAndBudget(Ctx& c, AnalyzerParams& p, float& hiCutInOut, int& p90out)
         else
           ++b;
       }
-      prev = std::move(kept);
+      prev = kept;
+      d.frames.push_back(std::move(kept));
+    }
+  }
+  return d;
+}
+
+// p90 of per-frame kept-peak counts under the given floor and band — the
+// budget currency, computed by filtering the stored probe peaks
+int countP90(const ProbeData& d, float floorDb, float lo, float hi)
+{
+  if (d.frames.empty()) return 0;
+  const float minAmp = powf(10.f, floorDb / 20.f);
+  std::vector<float> counts;
+  counts.reserve(d.frames.size());
+  for (const auto& f : d.frames)
+  {
+    int ct = 0;
+    for (const auto& pk : f)
+    {
+      if ((pk.amp >= minAmp) && (pk.freq >= lo) && (pk.freq <= hi)) ++ct;
+    }
+    counts.push_back(float(ct));
+  }
+  return int(percentile(std::move(counts), 0.9f));
+}
+
+// The quality walk. Each budget-coupled parameter has a ladder of steps in
+// perceptual units (1/3 octave for the cuts, 6 dB for the floor, ×0.8 for
+// unpitched resolution), starting from the conservative stage 1-3
+// estimates. Under budget: ascend round-robin, most audible benefit first
+// (hiCut — dullness is the common failure, and steps through empty spectrum
+// are free — then ampFloor, loCut, resolution); a step that would exceed
+// the budget is reverted and its knob frozen while the others continue.
+// Over budget at the start: the same ladders walk down, floor first
+// (rejected quiet peaks become bandwidth, which is energy-preserving).
+void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& out)
+{
+  const int target = std::max(8, c.budget - 8);  // tracker spawn/decay headroom
+  const float kThirdOctave = 1.259921f;          // 2^(1/3)
+  const float hiCutMax = std::min(kHiCutHi, float(0.45 * c.sr));
+
+  ProbeData probe = probeFrames(c, p);
+  int cnt = countP90(probe, p.ampFloor, p.freqFloor, hiCut);
+  bool budgetLimited = false;
+
+  if (cnt > target)
+  {
+    budgetLimited = true;
+    // floor rises are capped: if whole regions lose all kept peaks their
+    // residue is dropped and decay tails truncate audibly
+    const float floorCap = std::min(kAmpFloorHi, c.ampFloorV1 + 15.f);
+    bool changed = true;
+    while ((cnt > target) && changed)
+    {
+      changed = false;
+      if (p.ampFloor + 6.f <= floorCap)
+      {
+        p.ampFloor += 6.f;
+        changed = true;
+      }
+      else if (hiCut / kThirdOctave >= std::max(kHiCutLo, 2000.f))
+      {
+        hiCut /= kThirdOctave;
+        changed = true;
+      }
+      else if (c.unpitched && (p.resolution * 1.25f <= kResolutionHi))
+      {
+        applyResolution(c, p, p.resolution * 1.25f);
+        probe = probeFrames(c, p);
+        changed = true;
+      }
+      cnt = countP90(probe, p.ampFloor, p.freqFloor, hiCut);
     }
   }
 
-  // freqDrift: pass the movement real tracks exhibit at this hop (p95, with
-  // headroom), but stay under half the minimum kept spacing so a track
-  // cannot capture its neighbor
-  if (!hopDeltas.empty())
+  // ascend — also after a down-walk: shedding partials with one knob can
+  // leave headroom that other knobs can still spend (a knob the down-walk
+  // moved simply re-freezes on its first ascent attempt)
   {
-    const float p95 = percentile(hopDeltas, 0.95f);
+    // knob order: hiCut up, ampFloor down, loCut down, resolution down
+    // (unpitched only — finer-than-spacing resolution on pitched material
+    // recreates the unstable-frequency pathology)
+    enum
+    {
+      kKnobHiCut,
+      kKnobFloor,
+      kKnobLoCut,
+      kKnobRes,
+      kNumKnobs
+    };
+    bool frozen[kNumKnobs] = {false, false, false, !c.unpitched};
+    const float wFloor = std::max(kWidthLo, float(24. / std::max(0.05, c.activeDuration)));
+    const float resMin = std::max(kResolutionLo, 0.5f * wFloor);
+
+    while (!(frozen[kKnobHiCut] && frozen[kKnobFloor] && frozen[kKnobLoCut] && frozen[kKnobRes]))
+    {
+      for (int knob = 0; knob < kNumKnobs; ++knob)
+      {
+        if (frozen[knob]) continue;
+
+        AnalyzerParams trial = p;
+        float trialHiCut = hiCut;
+        bool reprobed = false;
+        ProbeData trialProbe;
+        switch (knob)
+        {
+          case kKnobHiCut:
+            if (hiCut >= hiCutMax)
+            {
+              frozen[knob] = true;
+              continue;
+            }
+            trialHiCut = std::min(hiCutMax, hiCut * kThirdOctave);
+            break;
+          case kKnobFloor:
+            if (p.ampFloor <= kAmpFloorLo)
+            {
+              frozen[knob] = true;
+              continue;
+            }
+            trial.ampFloor = std::max(kAmpFloorLo, p.ampFloor - 6.f);
+            break;
+          case kKnobLoCut:
+            if (p.freqFloor <= kLoCutLo)
+            {
+              frozen[knob] = true;
+              continue;
+            }
+            trial.freqFloor = std::max(kLoCutLo, p.freqFloor / kThirdOctave);
+            break;
+          case kKnobRes:
+            if (p.resolution <= resMin)
+            {
+              frozen[knob] = true;
+              continue;
+            }
+            applyResolution(c, trial, std::max(resMin, p.resolution * 0.8f));
+            trialProbe = probeFrames(c, trial);
+            reprobed = true;
+            break;
+        }
+
+        const ProbeData& eval = reprobed ? trialProbe : probe;
+        const int trialCnt = countP90(eval, trial.ampFloor, trial.freqFloor, trialHiCut);
+        if (trialCnt <= target)
+        {
+          p = trial;
+          hiCut = trialHiCut;
+          if (reprobed) probe = std::move(trialProbe);
+          cnt = trialCnt;
+        }
+        else
+        {
+          frozen[knob] = true;  // this knob is out of budget; others continue
+          budgetLimited = true;
+        }
+      }
+    }
+  }
+
+  // freqDrift: pass the movement real tracks exhibit at the final hop (p95
+  // with headroom), but stay under half the minimum kept spacing so a track
+  // cannot capture its neighbor
+  if (!probe.hopDeltas.empty())
+  {
+    const float p95 = percentile(probe.hopDeltas, 0.95f);
     p.freqDrift = clampf(1.5f * p95, kDriftLo, std::min(kDriftHi, 0.5f * p.resolution));
   }
   else
@@ -744,77 +912,10 @@ void probeAndBudget(Ctx& c, AnalyzerParams& p, float& hiCutInOut, int& p90out)
     p.freqDrift = clampf(0.2f * p.resolution, kDriftLo, std::min(kDriftHi, 0.5f * p.resolution));
   }
 
-  if (counts.empty())
-  {
-    p90out = 0;
-    return;
-  }
-
-  // budget: a ceiling, enforced at the 90th percentile of per-frame counts,
-  // with headroom for tracker spawn/decay overlap
-  const int target = std::max(8, c.budget - 8);
-  std::vector<float> countsF(counts.begin(), counts.end());
-  int p90 = int(percentile(countsF, 0.9f));
-  p90out = p90;
-  if (p90 <= target) return;
-
-  // find the frame at the p90 density and rank its peaks by A-weighted
-  // level: the budget should keep the most audible components, and raw
-  // amplitude overvalues low rumble by tens of dB
-  size_t densest = 0;
-  int bestCount = -1;
-  for (size_t i = 0; i < frames.size(); ++i)
-  {
-    const int ct = int(frames[i].size());
-    if ((ct <= p90) && (ct > bestCount))
-    {
-      bestCount = ct;
-      densest = i;
-    }
-  }
-  auto& peaks = frames[densest];
-  std::vector<size_t> rank(peaks.size());
-  std::iota(rank.begin(), rank.end(), 0);
-  auto aLevel = [&](size_t i)
-  { return 20. * log10(std::max(1e-8f, peaks[i].amp)) + aWeightDb(peaks[i].freq); };
-  std::sort(rank.begin(), rank.end(), [&](size_t a, size_t b) { return aLevel(a) > aLevel(b); });
-
-  // lever 1: trim hiCut while everything removed is inaudible next to the
-  // frame's strongest content (≥40 dB down, A-weighted)
-  if (!rank.empty())
-  {
-    const double frameMax = aLevel(rank[0]);
-    float newHiCut = c.loCut;
-    for (size_t i : rank)
-    {
-      if (aLevel(i) > frameMax - 40.)
-      {
-        newHiCut = std::max(newHiCut, peaks[i].freq);
-      }
-    }
-    hiCutInOut = clampf(newHiCut * 1.05f + 50.f, kHiCutLo, hiCutInOut);
-  }
-
-  // lever 2: raise the floor to admit only the target count, reading the
-  // threshold back as the raw amplitude of the marginal A-weighted peak
-  // (thinPeaks thresholds raw amplitude). Capped: if the floor rises so far
-  // that whole regions lose all kept peaks, their residue is dropped and
-  // decay tails truncate audibly
-  if (int(rank.size()) > target)
-  {
-    const float marginalAmp = peaks[rank[target]].amp;
-    const float newFloor = 20.f * log10f(std::max(1e-8f, marginalAmp)) + 1.f;
-    p.ampFloor = clampf(newFloor, p.ampFloor, std::min(kAmpFloorHi, c.ampFloorV1 + 15.f));
-  }
-
-  // lever 3, unpitched material only: coarsen resolution — for harmonic
-  // sounds this would mask real harmonics deterministically, which is worse
-  // than removing the quietest ones adaptively
-  if (c.unpitched && (p90 > 2 * target))
-  {
-    p.resolution = clampf(p.resolution * 1.5f, kResolutionLo, kResolutionHi);
-  }
+  out.probedSimultaneousP90 = cnt;
+  out.budgetLimited = budgetLimited;
 }
+
 
 }  // namespace
 
@@ -846,7 +947,8 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   stage2(c);
   stage3(c, out.params);
   out.hiCut = c.hiCut;
-  probeAndBudget(c, out.params, out.hiCut, out.probedSimultaneousP90);
+  out.budget = c.budget;
+  walkQuality(c, out.params, out.hiCut, out);
 
   // noise regions: at least ~3 kept-peak spacings wide so residue always
   // lands in a region that still holds a kept peak to carry it; at most

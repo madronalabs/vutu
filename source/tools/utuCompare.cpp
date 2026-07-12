@@ -1364,8 +1364,10 @@ void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
           r.pitchConfidence);
   fprintf(f, "  spacing dom  %8.1f Hz      min spacing %8.1f Hz\n", r.spacingHz,
           r.minSpacingHz);
-  fprintf(f, "  noise floor  %8.1f dB      active dur  %8.2f s   probe p90 %d\n",
-          r.noiseFloorDb, r.activeDuration, r.probedSimultaneousP90);
+  fprintf(f, "  noise floor  %8.1f dB      active dur  %8.2f s\n", r.noiseFloorDb,
+          r.activeDuration);
+  fprintf(f, "  budget use   %d/%d (p90, %s)\n", r.probedSimultaneousP90, r.budget,
+          r.budgetLimited ? "budget-limited" : "ladders exhausted");
 }
 
 int autoTest(const char* path)
@@ -1421,6 +1423,14 @@ int autoTest(const char* path)
   inRange(r.params.freqFloor, 20, 2000, "loCut");
   inRange(r.hiCut, 200, 20000, "hiCut");
   inRange(r.params.bwRegionWidth, 10, 5000, "noiseWidth");
+
+  // the walk must land at or under the target, and must terminate for one
+  // of the two legitimate reasons
+  if (r.probedSimultaneousP90 > budget - 8)
+  {
+    printf("  WALK OVERSHOT: p90 %d > target %d\n", r.probedSimultaneousP90, budget - 8);
+    pass = false;
+  }
 
   // full analysis at the chosen params: achieved simultaneous partials
   auto partials = ml::utu::analyzeToPartials(samplesF.data(), samplesF.size(), r.params);
