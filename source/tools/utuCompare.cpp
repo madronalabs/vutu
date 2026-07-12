@@ -18,6 +18,7 @@
 #include "utuWindow.h"
 
 #include "utuAnalyzer.h"
+#include "utuAutoParams.h"
 #include "utuBandwidth.h"
 #include "utuPeaks.h"
 #include "utuSynth.h"
@@ -1245,6 +1246,172 @@ int nelsonTest(const char* path)
   return pass ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// auto-test: automatic analysis-parameter estimation
+
+// synthetic test signals exercising the classifier branches
+std::vector<float> makeTestSignal(const std::string& name, double sr)
+{
+  std::vector<float> x;
+  std::mt19937 gen(7);
+  std::uniform_real_distribution<float> dist(-1.f, 1.f);
+
+  if (name == "@sine")
+  {
+    x.resize(size_t(5 * sr));
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+      x[i] = 0.5f * sinf(2.f * float(kPi) * 440.1f * i / float(sr));
+    }
+  }
+  else if (name == "@harm")
+  {
+    // 220 Hz, 20 harmonics at 1/k, 5 Hz vibrato of ±10 Hz on the
+    // fundamental (scaling with harmonic number), exponential decay
+    x.assign(size_t(4 * sr), 0.f);
+    std::vector<double> phase(21, 0.);
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+      const double t = i / sr;
+      const double f0 = 220. + 10. * sin(2. * kPi * 5. * t);
+      const double env = exp(-t / 1.5);
+      double v = 0.;
+      for (int k = 1; k <= 20; ++k)
+      {
+        phase[k] += 2. * kPi * k * f0 / sr;
+        v += (1. / k) * sin(phase[k]);
+      }
+      x[i] = float(0.2 * env * v);
+    }
+  }
+  else if (name == "@bell")
+  {
+    const double freqs[6] = {220., 563., 921., 1372., 1898., 2510.};
+    const double amps[6] = {1., .7, .5, .4, .3, .25};
+    const double taus[6] = {3., 2.2, 1.6, 1.2, 0.9, 0.7};
+    x.assign(size_t(6 * sr), 0.f);
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+      const double t = i / sr;
+      double v = 0.;
+      for (int k = 0; k < 6; ++k)
+      {
+        v += amps[k] * exp(-t / taus[k]) * sin(2. * kPi * freqs[k] * t);
+      }
+      x[i] = float(0.25 * v);
+    }
+  }
+  else if (name == "@noise")
+  {
+    // lowpassed noise burst: 10 ms attack, 1 s decay
+    x.assign(size_t(2 * sr), 0.f);
+    float lp = 0.f;
+    const float a = float(1. - exp(-2. * kPi * 4000. / sr));
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+      const double t = i / sr;
+      const double env = std::min(t / 0.01, 1.) * exp(-t / 1.);
+      lp += a * (dist(gen) - lp);
+      x[i] = float(0.7 * env * lp);
+    }
+  }
+  return x;
+}
+
+int autoTest(const char* path)
+{
+  double sr = kFileSampleRate;
+  std::vector<float> samplesF;
+  if (std::string(path) == "@short")
+  {
+    // 0.3 s: exercises the short-file guards (Welch size, window floor)
+    samplesF.resize(size_t(0.3 * sr));
+    for (size_t i = 0; i < samplesF.size(); ++i)
+    {
+      samplesF[i] = 0.5f * sinf(2.f * float(kPi) * 330.f * i / float(sr));
+    }
+  }
+  else if (std::string(path) == "@sine96")
+  {
+    sr = 96000.;
+    samplesF.resize(size_t(3 * sr));
+    for (size_t i = 0; i < samplesF.size(); ++i)
+    {
+      samplesF[i] = 0.5f * sinf(2.f * float(kPi) * 440.f * i / float(sr));
+    }
+  }
+  else
+  {
+    samplesF = makeTestSignal(path, sr);
+  }
+  if (samplesF.empty())
+  {
+    Loris::AiffFile file(path);
+    std::vector<double>& samplesD = file.samples();
+    samplesF.assign(samplesD.begin(), samplesD.end());
+  }
+  printf("%s: %zu samples at %g Hz\n", path, samplesF.size(), sr);
+
+  const int budget = 64;
+  auto r = ml::utu::computeAnalyzerParams(samplesF.data(), samplesF.size(), float(sr), budget);
+
+  printf("  resolution   %8.1f Hz      windowWidth %8.1f Hz (frame rate %.1f Hz)\n",
+         r.params.resolution, r.params.windowWidth, r.frameRateHz);
+  printf("  ampFloor     %8.1f dB      freqDrift   %8.1f Hz\n", r.params.ampFloor,
+         r.params.freqDrift);
+  printf("  loCut        %8.1f Hz      hiCut       %8.1f Hz\n", r.params.freqFloor, r.hiCut);
+  printf("  noiseWidth   %8.1f Hz      sidelobe    %8.1f dB\n", r.params.bwRegionWidth,
+         r.params.sidelobeLevel);
+  printf("  fundamental  %8.1f Hz      confidence  %8.2f\n", r.fundamental,
+         r.pitchConfidence);
+  printf("  spacing dom  %8.1f Hz      min spacing %8.1f Hz\n", r.spacingHz, r.minSpacingHz);
+  printf("  noise floor  %8.1f dB      active dur  %8.2f s   probe p90 %d\n", r.noiseFloorDb,
+         r.activeDuration, r.probedSimultaneousP90);
+
+  // range invariants
+  bool pass = true;
+  auto inRange = [&](float v, float lo, float hi, const char* what)
+  {
+    if (v < lo || v > hi)
+    {
+      printf("  RANGE VIOLATION: %s = %g not in [%g, %g]\n", what, v, lo, hi);
+      pass = false;
+    }
+  };
+  inRange(r.params.resolution, 8, 1024, "resolution");
+  inRange(r.params.windowWidth, 16, 768, "windowWidth");
+  inRange(r.params.ampFloor, -90, -20, "ampFloor");
+  inRange(r.params.freqDrift, 2, 80, "freqDrift");
+  inRange(r.params.freqFloor, 20, 2000, "loCut");
+  inRange(r.hiCut, 200, 20000, "hiCut");
+  inRange(r.params.bwRegionWidth, 10, 5000, "noiseWidth");
+
+  // full analysis at the chosen params: achieved simultaneous partials
+  auto partials = ml::utu::analyzeToPartials(samplesF.data(), samplesF.size(), r.params);
+  ml::cutHighs(*partials, r.hiCut);
+  ml::cleanOutliers(*partials);
+  if (partials->partials.size() > 0)
+  {
+    ml::calcStats(*partials);
+    printf("  full analysis: %zu partials, max simultaneous %zu (budget %d)\n",
+           partials->partials.size(), partials->stats.maxActivePartials, budget);
+    // the budget is enforced on probe statistics; allow tracker overlap slack
+    if (partials->stats.maxActivePartials > size_t(budget) * 5 / 4)
+    {
+      printf("  BUDGET EXCEEDED beyond tolerance\n");
+      pass = false;
+    }
+  }
+  else
+  {
+    printf("  full analysis: no partials\n");
+    pass = false;
+  }
+
+  printf("auto-test: %s\n", pass ? "PASS" : "FAIL");
+  return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -1260,11 +1427,13 @@ int main(int argc, char** argv)
         "  bandwidth-test <aiff>  peaks + residue bandwidth association vs Loris\n"
         "  analyze-test <aiff>    full analysis + phase fix vs Loris::Analyzer\n"
         "  synth-test [aiff]      bandwidth-enhanced synthesis vs Loris::Synthesizer\n"
-        "  nelson-test <aiff>     single-FFT cross-spectral reassignment vs Auger-Flandrin\n");
+        "  nelson-test <aiff>     single-FFT cross-spectral reassignment vs Auger-Flandrin\n"
+        "  auto-test <aiff|@sine|@harm|@bell|@noise>  automatic analysis parameters\n");
     return 2;
   }
   const std::string cmd(argv[1]);
   if (cmd == "nelson-test" && argc > 2) return nelsonTest(argv[2]);
+  if (cmd == "auto-test" && argc > 2) return autoTest(argv[2]);
   if (cmd == "fft-test") return fftTest();
   if (cmd == "window-test") return windowTest();
   if (cmd == "spectrum-test" && argc > 2) return spectrumTest(argv[2]);
