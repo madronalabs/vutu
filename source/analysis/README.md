@@ -105,3 +105,35 @@ Suggested order after the A experiment: **C (latency) is the priority — CPU
 was never the wall; A₂ is validated and shelved until transform cost
 matters (high sample rates, many bands, or small hops); B remains the
 fallback if exact single-FFT frequency is ever wanted; then D, G.**
+
+## Reconstruction metrics + tuning findings (2026-07-11)
+
+`utuMetrics` scores render vs source: spectral-shape RMS (mel bands),
+**wateriness** (excess 2–30 Hz band-envelope modulation — measures the
+artifact directly), transient rise deficit. `utucompare score|tune`;
+convert-dir scores every batch. Metric validation: the watery polyphonic
+test case scored watery 6.1 dB vs a 2.8–3.9 baseline (matches ears);
+the gambang's defect showed up as transient deficit, not wateriness.
+
+Budget-constrained tune results (start = auto params):
+- "Careless Synth and Vox" (polyphonic, watery): total −24%
+  (watery 6.1→4.3). Lessons: auto achieved only 23/64 actual simultaneous
+  partials (probe p90 at busy sites overestimates the global statistic →
+  the walk over-raised the floor); windowWidth wanted ~1.3× higher frame
+  rate; freqDrift wanted 2× the measured p95 (crossing tracks censor the
+  hop-delta statistic on polyphony).
+- gambang (inharmonic percussive): total −10%; wanted a longer window and
+  *half* the auto drift; transient deficit barely moved (attack smear
+  needs a structural fix, not parameters).
+- `driftTransientScale` ≈ 1.5–2 helped both sounds (small, consistent).
+  `hopJitter` and `onsetSnap` measured no improvement on either — the
+  frame-rate-coherence theory is not the dominant artifact here yet;
+  retest after tracking improves.
+
+Next-round candidates, in order: (1) probe→actual budget calibration in
+the quality walk; (2) **predictive tracking** (per-track frequency
+extrapolation + small gate, plus amp/phase continuity costs) — the
+remaining wateriness and both drift corrections point straight at track
+instability; (3) drift estimator robustness (censoring-aware); (4)
+transient handling for percussive attacks (short-window band or
+onset-locked analysis) — parameters alone did not fix the gambang.

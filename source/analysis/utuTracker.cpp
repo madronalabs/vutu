@@ -43,8 +43,9 @@ void PartialTracker::appendBreakpoint(BuildingPartial& p, int64_t frameSample, c
   p.phase.insert(p.phase.begin() + pos, pk.phase);
 }
 
-void PartialTracker::buildFrame(PeakFrame& frame, int64_t frameSample)
+void PartialTracker::buildFrame(PeakFrame& frame, int64_t frameSample, float freqDriftHz)
 {
+  const float drift = (freqDriftHz > 0.f) ? freqDriftHz : _freqDrift;
   _newlyEligible.clear();
   auto& peaks = frame.peaks;
 
@@ -85,7 +86,7 @@ void PartialTracker::buildFrame(PeakFrame& frame, int64_t frameSample)
     bool makeMatch = false;
     if (eligible < nEligible)
     {
-      if (_freqDrift > fabsf(endFreq(eligible) - pk.freq))
+      if (drift > fabsf(endFreq(eligible) - pk.freq))
       {
         const bool nextIsBetter =
             (i + 1 < frame.numKept) && (dist(eligible, peaks[i + 1]) < dist(eligible, pk));

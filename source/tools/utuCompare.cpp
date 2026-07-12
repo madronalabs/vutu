@@ -26,6 +26,7 @@
 #include "utuAnalyzer.h"
 #include "utuAutoParams.h"
 #include "utuBandwidth.h"
+#include "utuMetrics.h"
 #include "utuPeaks.h"
 #include "utuSynth.h"
 
@@ -1459,6 +1460,214 @@ int autoTest(const char* path)
 }
 
 // ---------------------------------------------------------------------------
+// score: reconstruction metrics
+
+void printScore(FILE* f, const ml::utu::ReconstructionScore& s)
+{
+  fprintf(f,
+          "  score: spectral %.2f dB, watery %.2f dB, transients %.2f dB/ms, total %.2f\n",
+          s.spectralRmsDb, s.wateryDb, s.transientDeficit, s.total);
+}
+
+int scoreCmd(const char* srcPath, const char* renderPath)
+{
+  std::vector<float> src, render;
+  double srcRate = 0., renderRate = 0.;
+  if (!loadAudio(srcPath, src, srcRate)) return 2;
+  if (!loadAudio(renderPath, render, renderRate)) return 2;
+  if (long(srcRate) != long(renderRate))
+  {
+    printf("sample rates differ (%g vs %g)\n", srcRate, renderRate);
+    return 2;
+  }
+  auto s = ml::utu::scoreReconstruction(src.data(), src.size(), render.data(), render.size(),
+                                        srcRate);
+  printScore(stdout, s);
+  return 0;
+}
+
+// analyze + render + score at the given params: the objective for tuning.
+// Parameter sets that exceed the simultaneous-partial budget are infeasible
+// — otherwise the descent just buys quality with partials we don't have.
+float evalParams(const std::vector<float>& src, double sr,
+                 const ml::utu::AnalyzerParams& params, float hiCut, int budget,
+                 ml::utu::ReconstructionScore* scoreOut = nullptr,
+                 size_t* maxActiveOut = nullptr)
+{
+  auto partials = ml::utu::analyzeToPartials(src.data(), src.size(), params);
+  ml::cutHighs(*partials, hiCut);
+  ml::cleanOutliers(*partials);
+  if (partials->partials.empty()) return 1e9f;
+  ml::calcStats(*partials);
+  if (maxActiveOut) *maxActiveOut = partials->stats.maxActivePartials;
+  if (int(partials->stats.maxActivePartials) > budget) return 1e9f;
+
+  ml::utu::SynthParams sp;
+  sp.sampleRate = float(sr);
+  sp.fadeTime = 0.001f;
+  ml::utu::PartialSynthesizer synth;
+  synth.setParams(sp);
+  std::vector<float> out;
+  synth.render(*partials, out);
+  if (out.empty()) return 1e9f;
+
+  auto s = ml::utu::scoreReconstruction(src.data(), src.size(), out.data(), out.size(), sr);
+  if (scoreOut) *scoreOut = s;
+  return s.total;
+}
+
+// ---------------------------------------------------------------------------
+// tune: coordinate descent over analyzer params against the reconstruction
+// score, starting from the automatic estimates. The deltas between tuned
+// and automatic values, across sounds, teach us better heuristics.
+
+int tuneCmd(const char* path, int budget)
+{
+  std::vector<float> src;
+  double sr = 0.;
+  if (!loadAudio(path, src, sr)) return 2;
+  // silence cleanOutliers chatter during the many evaluations
+  printf("%s: %zu samples at %g Hz, budget %d\n", path, src.size(), sr, budget);
+
+  auto autoParams = ml::utu::computeAnalyzerParams(src.data(), src.size(), float(sr), budget);
+  ml::utu::AnalyzerParams p = autoParams.params;
+  const float hiCut = autoParams.hiCut;
+
+  ml::utu::ReconstructionScore baseScore;
+  size_t baseMaxActive = 0;
+  float best = evalParams(src, sr, p, hiCut, budget, &baseScore, &baseMaxActive);
+  printf("auto maxActive %zu / budget %d\n", baseMaxActive, budget);
+  printf("auto params");
+  printScore(stdout, baseScore);
+
+  struct Knob
+  {
+    const char* name;
+    float lo, hi;
+    bool multiplicative;
+    float step;             // factor or additive amount
+    float* (*get)(ml::utu::AnalyzerParams&);
+    float sensitivity{0.f};
+  };
+  auto gWidth = [](ml::utu::AnalyzerParams& a) { return &a.windowWidth; };
+  auto gDrift = [](ml::utu::AnalyzerParams& a) { return &a.freqDrift; };
+  auto gRes = [](ml::utu::AnalyzerParams& a) { return &a.resolution; };
+  auto gFloor = [](ml::utu::AnalyzerParams& a) { return &a.ampFloor; };
+  auto gJitter = [](ml::utu::AnalyzerParams& a) { return &a.hopJitter; };
+  auto gScale = [](ml::utu::AnalyzerParams& a) { return &a.driftTransientScale; };
+  Knob knobs[] = {
+      {"windowWidth", 16.f, 768.f, true, 1.3f, gWidth},
+      {"freqDrift", 2.f, 80.f, true, 2.f, gDrift},
+      {"resolution", 8.f, 1024.f, true, 1.3f, gRes},
+      {"ampFloor", -90.f, -20.f, false, 9.f, gFloor},
+      {"hopJitter", 0.f, 0.5f, false, 0.15f, gJitter},
+      {"driftTransientScale", 1.f, 8.f, true, 2.f, gScale},
+  };
+
+  const int sweeps = 2;
+  for (int sweep = 0; sweep < sweeps; ++sweep)
+  {
+    for (Knob& k : knobs)
+    {
+      const float center = *k.get(p);
+      float candidates[2];
+      if (k.multiplicative)
+      {
+        candidates[0] = std::min(k.hi, center * k.step);
+        candidates[1] = std::max(k.lo, center / k.step);
+      }
+      else
+      {
+        candidates[0] = std::min(k.hi, center + k.step);
+        candidates[1] = std::max(k.lo, center - k.step);
+      }
+      float sweepBest = best;
+      float bestVal = center;
+      for (float cand : candidates)
+      {
+        if (cand == center) continue;
+        ml::utu::AnalyzerParams trial = p;
+        *k.get(trial) = cand;
+        const float s = evalParams(src, sr, trial, hiCut, budget);
+        if (s < sweepBest)
+        {
+          sweepBest = s;
+          bestVal = cand;
+        }
+      }
+      k.sensitivity = std::max(k.sensitivity, best - sweepBest);
+      if (bestVal != center)
+      {
+        *k.get(p) = bestVal;
+        best = sweepBest;
+        printf("  sweep %d: %s -> %.2f (total %.2f)\n", sweep + 1, k.name, bestVal, best);
+      }
+      // halve the exploration step per sweep
+      k.step = k.multiplicative ? (1.f + (k.step - 1.f) * 0.5f) : (k.step * 0.5f);
+    }
+  }
+
+  ml::utu::ReconstructionScore tunedScore;
+  // booleans don't bracket: try onsetSnap once at the tuned settings
+  {
+    ml::utu::AnalyzerParams trial = p;
+    trial.onsetSnap = true;
+    const float s = evalParams(src, sr, trial, hiCut, budget);
+    if (s < best)
+    {
+      p = trial;
+      best = s;
+      printf("  onsetSnap -> on (total %.2f)\n", best);
+    }
+  }
+
+  size_t tunedMaxActive = 0;
+  evalParams(src, sr, p, hiCut, budget, &tunedScore, &tunedMaxActive);
+  printf("tuned params (deltas from auto), maxActive %zu / budget %d:\n", tunedMaxActive,
+         budget);
+  for (Knob& k : knobs)
+  {
+    ml::utu::AnalyzerParams a = autoParams.params;
+    printf("  %-20s %8.2f (auto %8.2f)   sensitivity %.3f\n", k.name, *k.get(p), *k.get(a),
+           k.sensitivity);
+  }
+  printScore(stdout, tunedScore);
+  printf("total: %.2f -> %.2f (%+.1f%%)\n", baseScore.total, tunedScore.total,
+         100.f * (tunedScore.total - baseScore.total) / std::max(1e-6f, baseScore.total));
+
+  // write the tuned render beside the source for listening
+  {
+    auto partials = ml::utu::analyzeToPartials(src.data(), src.size(), p);
+    ml::cutHighs(*partials, hiCut);
+    ml::cleanOutliers(*partials);
+    ml::calcStats(*partials);
+    ml::utu::SynthParams sp;
+    sp.sampleRate = float(sr);
+    sp.fadeTime = 0.001f;
+    ml::utu::PartialSynthesizer synth;
+    synth.setParams(sp);
+    std::vector<float> out;
+    synth.render(*partials, out);
+    float peak = 0.f;
+    for (float v : out) peak = std::max(peak, fabsf(v));
+    if (peak > 1.f)
+    {
+      for (auto& v : out) v *= 0.999f / peak;
+    }
+    namespace fs = std::filesystem;
+    const fs::path in(path);
+    std::string ext = in.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char ch) { return char(std::tolower(ch)); });
+    const int fmt = ((ext == ".wav") ? SF_FORMAT_WAV : SF_FORMAT_AIFF) | SF_FORMAT_PCM_24;
+    const fs::path outPath = in.parent_path() / (in.stem().string() + "-tuned" + in.extension().string());
+    writeAudio(outPath.string(), out.data(), out.size(), sr, fmt);
+    printf("wrote %s\n", outPath.string().c_str());
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // convert-dir: batch analyze -> resynthesize every audio file in a directory,
 // writing <name>-converted.<ext> beside each source and auto-params.txt with
 // the automatically chosen analysis parameters per file
@@ -1576,6 +1785,11 @@ int convertDir(const char* dirPath, int budget)
       continue;
     }
     fprintf(report, "  wrote %s\n", outPath.filename().string().c_str());
+
+    // every batch is a measurement run
+    const auto s =
+        ml::utu::scoreReconstruction(x.data(), x.size(), out.data(), out.size(), sr);
+    printScore(report, s);
   }
   fclose(report);
   printf("wrote %s\n", reportPath.string().c_str());
@@ -1601,7 +1815,9 @@ int main(int argc, char** argv)
         "  synth-test [aiff]      bandwidth-enhanced synthesis vs Loris::Synthesizer\n"
         "  nelson-test <aiff>     single-FFT cross-spectral reassignment vs Auger-Flandrin\n"
         "  auto-test <aiff|@sine|@harm|@bell|@noise>  automatic analysis parameters\n"
-        "  convert-dir <dir> [budget]   auto-analyze + resynthesize every audio file\n");
+        "  convert-dir <dir> [budget]   auto-analyze + resynthesize every audio file\n"
+        "  score <src> <render>         reconstruction metrics\n"
+        "  tune <file> [budget]         coordinate-descent parameter search vs the score\n");
     return 2;
   }
   const std::string cmd(argv[1]);
@@ -1609,6 +1825,8 @@ int main(int argc, char** argv)
   if (cmd == "auto-test" && argc > 2) return autoTest(argv[2]);
   if (cmd == "convert-dir" && argc > 2)
     return convertDir(argv[2], argc > 3 ? atoi(argv[3]) : 64);
+  if (cmd == "score" && argc > 3) return scoreCmd(argv[2], argv[3]);
+  if (cmd == "tune" && argc > 2) return tuneCmd(argv[2], argc > 3 ? atoi(argv[3]) : 64);
   if (cmd == "fft-test") return fftTest();
   if (cmd == "window-test") return windowTest();
   if (cmd == "spectrum-test" && argc > 2) return spectrumTest(argv[2]);

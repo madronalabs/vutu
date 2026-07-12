@@ -51,8 +51,10 @@ class PartialTracker
   void configure(float freqDriftHz, double sampleRate);
   void reset();
 
-  // consume frame.peaks[0..numKept), reordering them by frequency
-  void buildFrame(PeakFrame& frame, int64_t frameSample);
+  // consume frame.peaks[0..numKept), reordering them by frequency.
+  // freqDriftHz <= 0 uses the configured drift; callers may vary the drift
+  // per frame (e.g. wider at transients)
+  void buildFrame(PeakFrame& frame, int64_t frameSample, float freqDriftHz = 0.f);
 
   std::vector<BuildingPartial>& partials() { return _partials; }
 

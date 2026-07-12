@@ -36,6 +36,8 @@ void PartialAnalyzer::configure(const AnalyzerParams& p)
   const long winlen = _spectrum.windowLength();
   _windowScratch.assign(winlen, 0.f);
   _buffer.resize(int(4 * winlen));
+  _envBlockSize = std::max(size_t(1), size_t(0.002 * _params.sampleRate + 0.5));
+  _blockRise.assign(kRiseRing, 0.f);
   _configured = true;
   reset();
 }
@@ -47,6 +49,13 @@ void PartialAnalyzer::reset()
   _buffer.clear();
   _frameSample = 0;
   _samplesPushed = 0;
+  _envAcc = 0.;
+  _envAccCount = 0;
+  _envBlock = 0;
+  _prevBlockDb = -160.f;
+  std::fill(_blockRise.begin(), _blockRise.end(), 0.f);
+  _snapTarget = -1;
+  _rng = 0x9E3779B9u;
 
   // pre-write half a window of silence so the first frame is centered on
   // the first input sample; zero samples here are equivalent to Loris's
@@ -56,10 +65,72 @@ void PartialAnalyzer::reset()
   _buffer.write(_windowScratch.data(), half);
 }
 
+// causal 2 ms block-RMS rise tracking; rises are read back by frame center
+void PartialAnalyzer::detectTransients(const float* src, size_t n)
+{
+  const float msPerBlock = float(1000. * _envBlockSize / _params.sampleRate);
+  for (size_t i = 0; i < n; ++i)
+  {
+    _envAcc += double(src[i]) * src[i];
+    if (++_envAccCount == _envBlockSize)
+    {
+      const float db = 10.f * log10f(float(std::max(1e-16, _envAcc / _envBlockSize)));
+      const float rise = std::max(0.f, db - _prevBlockDb) / msPerBlock;
+      _blockRise[size_t(_envBlock % int64_t(kRiseRing))] = rise;
+
+      // onset: a sharp rise becomes a snap target for the frame clock,
+      // one at a time, always ahead of the frames being processed
+      if (_params.onsetSnap && (rise > 2.f) && (_snapTarget < 0))
+      {
+        const int64_t onsetSample = _envBlock * int64_t(_envBlockSize);
+        if (onsetSample > _frameSample)
+        {
+          _snapTarget = onsetSample;
+        }
+      }
+      _prevBlockDb = db;
+      _envAcc = 0.;
+      _envAccCount = 0;
+      ++_envBlock;
+    }
+  }
+}
+
+float PartialAnalyzer::transientLevelAt(int64_t sample) const
+{
+  const int64_t block = sample / int64_t(_envBlockSize);
+  if ((block < 0) || (block >= _envBlock)) return 0.f;
+  const float rise = _blockRise[size_t(block % int64_t(kRiseRing))];
+  // 1 dB/ms is the sustain/transient boundary used throughout; full
+  // transient credit at 5 dB/ms
+  return std::min(1.f, std::max(0.f, (rise - 1.f) / 4.f));
+}
+
 void PartialAnalyzer::processHop()
 {
   const long winlen = _spectrum.windowLength();
-  _buffer.readWithOverlap(_windowScratch.data(), winlen, winlen - _hopSamples);
+
+  // decide the hop to the next frame before reading: the buffer read
+  // advances by (winlen - overlap)
+  long hopNow = _hopSamples;
+  if (_params.hopJitter > 0.f)
+  {
+    // xorshift32, deterministic per run: dithering the hop decorrelates
+    // frame-rate-coherent estimation error
+    _rng ^= _rng << 13;
+    _rng ^= _rng >> 17;
+    _rng ^= _rng << 5;
+    const float u = (int32_t(_rng) / 2147483648.f);  // [-1, 1)
+    hopNow = std::max(1L, long(_hopSamples * (1.f + _params.hopJitter * u)));
+  }
+  if ((_snapTarget > _frameSample) && (_snapTarget <= _frameSample + hopNow))
+  {
+    hopNow = std::max(1L, long(_snapTarget - _frameSample));
+    _snapTarget = -1;
+  }
+  hopNow = std::min(hopNow, winlen - 1L);
+
+  _buffer.readWithOverlap(_windowScratch.data(), winlen, winlen - hopNow);
 
   _spectrum.transform(_windowScratch.data(), winlen, winlen / 2);
   _selector.selectPeaks(_spectrum, _params.freqFloor, _peakFrame);
@@ -70,8 +141,16 @@ void PartialAnalyzer::processHop()
   {
     _bwAssociator.associateBandwidth(_peakFrame);
   }
-  _tracker.buildFrame(_peakFrame, _frameSample);
-  _frameSample += _hopSamples;
+
+  // freqDrift widens toward transients so glides and chaotic onsets stay
+  // on one track, and locks down in sustains so neighbors are not captured
+  float drift = _params.freqDrift;
+  if (_params.driftTransientScale > 1.f)
+  {
+    drift *= 1.f + (_params.driftTransientScale - 1.f) * transientLevelAt(_frameSample);
+  }
+  _tracker.buildFrame(_peakFrame, _frameSample, drift);
+  _frameSample += hopNow;
 }
 
 void PartialAnalyzer::pushSamples(const float* src, size_t n)
@@ -84,6 +163,7 @@ void PartialAnalyzer::pushSamples(const float* src, size_t n)
     if (m > 0)
     {
       _buffer.write(src, m);
+      detectTransients(src, m);
       src += m;
       n -= m;
       _samplesPushed += m;
