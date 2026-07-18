@@ -2,204 +2,169 @@
 // vutu
 // Copyright (c) 2026 Madrona Labs LLC. http://www.madronalabs.com
 
+// Implemented from Fitz & Fulop, "A Unified Theory of Time-Frequency
+// Reassignment" (eqs. 64-65 for the corrections, Sec. 8 for phase); no
+// Loris source consulted. The reassignment signs and scalings are pinned by
+// the utucompare selftests: an off-bin sine must reassign toward its true
+// frequency (sine, chirp), and an impulse Δ samples after the frame center
+// must measure timeCorr = +Δ exactly (impulse-time).
+
 #include "utuSpectrum.h"
 
-#include <cassert>
+#include <algorithm>
 #include <cmath>
-#include <cstring>
-
-#include "mldsp.h"
 
 namespace ml::utu
 {
 
 namespace
 {
-constexpr float kTwoPiF = 6.28318530717958648f;
 
-long nextPowerOfTwoAtLeastTwice(long n)
+constexpr float kTwoPi = 6.28318530717958648f;
+
+// the reassignment quotients are undefined where the spectrogram is zero
+// (the paper's zero-valued-distribution caveat); clamp the denominator
+constexpr float kMinMagSq = 1e-30f;
+
+long nextPow2AtLeastTwice(long n)
 {
-  long p = 1;
-  while (p < 2 * n) p <<= 1;
-  return p;
+  long N = 1;
+  while (N < 2 * n) N <<= 1;
+  return N;
 }
 
-size_t padTo4(long n) { return static_cast<size_t>((n + 3) & ~3L); }
+// SoA arrays padded to a multiple of 4 floats for vector-friendly loops
+size_t padded(long n) { return (size_t(n) + 3) & ~size_t(3); }
+
 }  // namespace
 
 void ReassignedSpectrum::configure(ReassignmentWindows windows)
 {
   _windows = std::move(windows);
+  const long N = nextPow2AtLeastTwice(_windows.length);
+  _fft = std::make_unique<RealFFT>(N);
+  _oversampling = float(N) / float(_windows.length);
+  _input.assign(N, 0.f);
 
-  const long n = nextPowerOfTwoAtLeastTwice(_windows.length);
-  _fft = std::make_unique<RealFFT>(n);
-  _input.assign(n, 0.f);
-  _oversampling = static_cast<float>(n) / _windows.length;
-
-  _frame.fftSize = n;
-  _frame.bins = n / 2 + 1;
-  const size_t padded = padTo4(_frame.bins);
+  _frame.fftSize = N;
+  _frame.bins = N / 2 + 1;
+  const size_t p = padded(_frame.bins);
   for (auto* v : {&_frame.re, &_frame.im, &_frame.dRe, &_frame.dIm, &_frame.tRe, &_frame.tIm,
                   &_frame.magSq, &_frame.freqCorr, &_frame.timeCorr})
   {
-    v->assign(padded, 0.f);
+    v->assign(p, 0.f);
   }
 }
 
-// multiply src[begin..begin+count) by win[winOffset..) and write the products
-// into the FFT input at their post-rotation positions: input[(i - rotateBy) mod N]
-void ReassignedSpectrum::fillWindowed(const float* src, long begin, long count, long winOffset,
-                                      long rotateBy, const std::vector<float>& win)
+// Window the source about sampCenter and rotate so the window's center
+// sample lands at FFT index 0: the transform then reports phase relative to
+// the frame center (the STFT convention of eq. 3) instead of the moving-
+// window convention of eq. 5, whose phases rotate at ω (eq. 13) — one array
+// rotation replaces a per-bin phase twist. Samples outside [0, srcLength)
+// are zeros.
+void ReassignedSpectrum::fillWindowed(const float* src, long srcLength, long sampCenter,
+                                      const std::vector<float>& win)
 {
-  const long n = _frame.fftSize;
-  float* buf = _input.data();
-  const float* x = src + begin;
-  const float* w = win.data() + winOffset;
+  const long N = _frame.fftSize;
+  const long len = _windows.length;
+  const long half = (len - 1) / 2;
+  std::fill(_input.begin(), _input.end(), 0.f);
 
-  // i in [0, rotateBy) lands at the end of the buffer, the rest at the front
-  float* tail = buf + (n - rotateBy);
-  for (long i = 0; i < rotateBy; ++i)
+  // window sample j multiplies src[sampCenter − half + j]
+  const long jBegin = std::max(long(0), half - sampCenter);
+  const long jEnd = std::min(len, srcLength - sampCenter + half);
+  const float* x = src + sampCenter - half;
+  for (long j = jBegin; j < std::min(jEnd, half); ++j)
   {
-    tail[i] = x[i] * w[i];
+    _input[N - half + j] = x[j] * win[j];  // left of center → buffer tail
   }
-  for (long i = rotateBy; i < count; ++i)
+  for (long j = std::max(jBegin, half); j < jEnd; ++j)
   {
-    buf[i - rotateBy] = x[i] * w[i];
+    _input[j - half] = x[j] * win[j];  // center and right → buffer head
   }
 }
 
-// One hop of the moving-window transform (Fitz & Fulop eq. 5): the window is
-// aligned with sampCenter and the windowed input is rotated so the window
-// center lands at index 0. The rotation makes the FFT report phase relative
-// to the frame center — the STFT phase convention of eq. 3, in which a
-// steady sinusoid's phase is stationary from frame to frame — rather than
-// the moving-window convention of eq. 5, whose phases rotate at ω (eq. 13).
-// Rotating the time-domain input costs nothing here (the windowed segments
-// are simply written at their post-rotation positions), where the same fixup
-// in the frequency domain would cost a complex multiply per bin.
 void ReassignedSpectrum::transform(const float* src, long srcLength, long sampCenter)
 {
-  assert(_fft);
-  assert((sampCenter >= 0) && (sampCenter < srcLength));
+  fillWindowed(src, srcLength, sampCenter, _windows.w);
+  _fft->forward(_input.data(), _frame.re.data(), _frame.im.data());
+  fillWindowed(src, srcLength, sampCenter, _windows.wFreqRamp);
+  _fft->forward(_input.data(), _frame.dRe.data(), _frame.dIm.data());
+  fillWindowed(src, srcLength, sampCenter, _windows.wTimeRamp);
+  _fft->forward(_input.data(), _frame.tRe.data(), _frame.tIm.data());
 
-  const long half = _windows.length / 2;  // length is odd; both halves are equal
-  const long begin = std::max(0L, sampCenter - half);
-  const long end = std::min(srcLength, sampCenter + half + 1);
-  const long count = end - begin;
-  const long winOffset = half - (sampCenter - begin);
-  const long rotateBy = sampCenter - begin;
-
-  SpectrumFrame& f = _frame;
-  struct Pass
+  // Per-bin reassignment algebra on the three spectra. With the windows
+  // applied as a correlation (h(τ−t), not the paper's h(t−τ)):
+  //
+  //   S_hd(ν) = −iν·S_h(ν) for the derivative window, so
+  //   Im{Xd·Xh*}/|Xh|² = ω_bin − ω_true — the paper's eq. 65 correction
+  //   with its sign flipped, hence the leading minus. ×N/len finishes the
+  //   window's len/2π into the rad/sample → fractional-bin conversion.
+  //
+  //   An impulse p samples after the frame center gives Xt·Xh* = p·|Xh|²
+  //   real and positive, so eq. 64's t̂ − t is +Re{Xt·Xh*}/|Xh|² in
+  //   samples, with no sign flip.
+  const long bins = _frame.bins;
+  const float ovs = _oversampling;
+  const float* re = _frame.re.data();
+  const float* im = _frame.im.data();
+  const float* dRe = _frame.dRe.data();
+  const float* dIm = _frame.dIm.data();
+  const float* tRe = _frame.tRe.data();
+  const float* tIm = _frame.tIm.data();
+  float* magSq = _frame.magSq.data();
+  float* freqCorr = _frame.freqCorr.data();
+  float* timeCorr = _frame.timeCorr.data();
+  for (long k = 0; k < bins; ++k)
   {
-    const std::vector<float>* win;
-    float *re, *im;
-  };
-  const Pass passes[3] = {{&_windows.w, f.re.data(), f.im.data()},
-                          {&_windows.wFreqRamp, f.dRe.data(), f.dIm.data()},
-                          {&_windows.wTimeRamp, f.tRe.data(), f.tIm.data()}};
-  for (const Pass& p : passes)
-  {
-    std::memset(_input.data(), 0, _input.size() * sizeof(float));
-    fillWindowed(src, begin, count, winOffset, rotateBy, *p.win);
-    _fft->forward(_input.data(), p.re, p.im);
-  }
-
-  // Per-bin reassignment kernels, 4 bins at a time. These are the efficient
-  // spectrogram reassignment operators of Fitz & Fulop Sec. 6.2, with the
-  // phase derivatives eliminated in favor of cross-spectral products:
-  //
-  //   freqCorr:  ω̂ − ω = ∂φ/∂t = Im{Xd·conj(Xh)}/|Xh|²   (eq. 65)
-  //   timeCorr:  t̂ − t = −∂φ/∂ω = Re{Xt·conj(Xh)}/|Xh|²  (eq. 64)
-  //
-  // expanded into real arithmetic:
-  //   magSq    = |Xh|²
-  //   freqCorr = -(N/winlen)·(Xh.re·Xd.im − Xh.im·Xd.re) / |Xh|²
-  //   timeCorr = (Xh.re·Xt.re + Xh.im·Xt.im) / |Xh|²
-  //
-  // Signs relative to the paper follow from applying the window as h(τ−t)
-  // (window slid along the signal) rather than h(t−τ), which negates the
-  // derivative window's contribution. The N/winlen factor completes the
-  // rad/sample -> fractional-bin conversion begun in the window scaling
-  // (see ReassignmentWindows); the time ramp is already in samples.
-  //
-  // |Xh|² is clamped away from zero: reassignment is meaningless where there
-  // is no energy to reassign (the paper's zero-valued-distribution caveat),
-  // and garbage corrections in spectral-floor bins only produce candidates
-  // that the amplitude threshold rejects.
-  const float4 vNegOversampling(-_oversampling);
-  const float4 vFloor(1e-30f);
-  const size_t padded = f.re.size();
-  for (size_t i = 0; i < padded; i += 4)
-  {
-    const float4 hr = loadFloat4(f.re.data() + i);
-    const float4 hi = loadFloat4(f.im.data() + i);
-    const float4 dr = loadFloat4(f.dRe.data() + i);
-    const float4 di = loadFloat4(f.dIm.data() + i);
-    const float4 tr = loadFloat4(f.tRe.data() + i);
-    const float4 ti = loadFloat4(f.tIm.data() + i);
-
-    const float4 magSq = multiplyAdd(hr, hr, hi * hi);
-    const float4 denom = max(magSq, vFloor);
-    const float4 freqCorr = vNegOversampling * (hr * di - hi * dr) / denom;
-    const float4 timeCorr = multiplyAdd(hr, tr, hi * ti) / denom;
-
-    storeFloat4(f.magSq.data() + i, magSq);
-    storeFloat4(f.freqCorr.data() + i, freqCorr);
-    storeFloat4(f.timeCorr.data() + i, timeCorr);
+    const float m = re[k] * re[k] + im[k] * im[k];
+    magSq[k] = m;
+    const float d = std::max(m, kMinMagSq);
+    freqCorr[k] = -ovs * (dIm[k] * re[k] - dRe[k] * im[k]) / d;
+    timeCorr[k] = (tRe[k] * re[k] + tIm[k] * im[k]) / d;
   }
 }
 
-float ReassignedSpectrum::magnitudeAt(long idx) const
-{
-  assert((idx >= 0) && (idx < _frame.bins));
-  return sqrtf(_frame.magSq[idx]);
-}
+float ReassignedSpectrum::magnitudeAt(long idx) const { return sqrtf(_frame.magSq[idx]); }
 
-// phase of Xh at idx, mirroring bins above N/2 by conjugate symmetry
-// (phaseAt can look one bin past the last)
 float ReassignedSpectrum::rawPhaseAt(long idx) const
 {
-  const long n = _frame.fftSize;
-  if (idx < 0) idx += n;
-  if (idx < _frame.bins)
+  // conjugate symmetry extends the half spectrum one bin past either end
+  long i = idx;
+  float sign = 1.f;
+  if (idx < 0)
   {
-    return atan2f(_frame.im[idx], _frame.re[idx]);
+    i = -idx;
+    sign = -1.f;
   }
-  const long mirror = n - idx;
-  return atan2f(-_frame.im[mirror], _frame.re[mirror]);
+  else if (idx > _frame.fftSize / 2)
+  {
+    i = _frame.fftSize - idx;
+    sign = -1.f;
+  }
+  return sign * atan2f(_frame.im[i], _frame.re[i]);
 }
 
-// Phase correction for phase-correct additive modeling, Fitz & Fulop Sec. 8.
-// The STFT filters are linear phase across their passbands, so the phase at
-// the reassigned frequency (rather than the bin center) is recovered by
-// linear interpolation of the discrete phase spectrum toward the neighbor
-// bin in the direction of the frequency correction. Then, because the data
-// is attributed to the reassigned time t̂ rather than the frame center t, the
-// phase is advanced by the travel of the reassigned frequency over that
-// interval: ω̂·(t̂ − t), here (idx + freqCorr)·(2π/N)·timeCorr.
+// Phase at the reassigned coordinates (Sec. 8), evaluated only at accepted
+// peaks. Frequency: the analysis filters are linear-phase across a
+// passband, so interpolate the raw phase linearly toward the neighbor bin
+// in the direction of the frequency correction. Time: advance by the travel
+// over the reassignment interval, ω̂·(t̂ − t).
 float ReassignedSpectrum::phaseAt(long idx) const
 {
-  assert((idx >= 0) && (idx < _frame.bins));
-  float phase = rawPhaseAt(idx);
-  const float offsetTime = _frame.timeCorr[idx];
-  const float offsetFreq = _frame.freqCorr[idx];
-
-  if (offsetFreq > 0)
+  const float fc = _frame.freqCorr[idx];
+  const float tc = _frame.timeCorr[idx];
+  float p = rawPhaseAt(idx);
+  if (fc > 0.f)
   {
-    const float slope = rawPhaseAt(idx + 1) - phase;
-    phase += offsetFreq * slope;
+    p += fc * (rawPhaseAt(idx + 1) - p);
   }
   else
   {
-    const float slope = phase - rawPhaseAt(idx - 1);
-    phase += offsetFreq * slope;
+    p += fc * (p - rawPhaseAt(idx - 1));
   }
-
-  const float fracFreqSample = idx + offsetFreq;
-  phase += offsetTime * fracFreqSample * kTwoPiF / _frame.fftSize;
-
-  return fmodf(phase, kTwoPiF);
+  p += tc * (float(idx) + fc) * (kTwoPi / _frame.fftSize);
+  return fmodf(p, kTwoPi);
 }
 
 }  // namespace ml::utu

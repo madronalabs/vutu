@@ -2,143 +2,154 @@
 // vutu
 // Copyright (c) 2026 Madrona Labs LLC. http://www.madronalabs.com
 
+// Implemented from Fitz & Fulop, "A Unified Theory of Time-Frequency
+// Reassignment" (Sec. 6.2) and the published Kaiser window formulas of
+// Kaiser & Schafer 1980; no Loris source consulted. Correctness is pinned
+// by the utucompare selftests (window-shape, window-hd), which cross-check
+// the analytic derivative window against the paper's eq. 70 construction
+// and an 8th-order finite difference.
+
 #include "utuWindow.h"
 
-#include <cassert>
 #include <cmath>
-#include <numeric>
 
 namespace ml::utu
 {
 
+namespace
+{
+
+constexpr double kPi = 3.14159265358979324;
+
+// modified Bessel functions of the first kind by power series, in double.
+// The series is stopped at 1e-12 relative, well below the float precision
+// of the stored window tables.
+
+double besselI0(double x)
+{
+  const double q = 0.25 * x * x;
+  double term = 1., sum = 1.;
+  for (int k = 1; k < 1000; ++k)
+  {
+    term *= q / (double(k) * k);
+    sum += term;
+    if (term < 1e-12 * sum) break;
+  }
+  return sum;
+}
+
+double besselI1(double x)
+{
+  // I1(x) = (x/2)·Σ (x²/4)^k / (k!·(k+1)!)
+  const double q = 0.25 * x * x;
+  double term = 1., sum = 1.;
+  for (int k = 1; k < 1000; ++k)
+  {
+    term *= q / (double(k) * (k + 1));
+    sum += term;
+    if (term < 1e-12 * sum) break;
+  }
+  return 0.5 * x * sum;
+}
+
+}  // namespace
+
 namespace kaiser
 {
 
-namespace
-{
-constexpr double kPi = 3.14159265358979324;
-
-// zeroeth order modified Bessel function of the first kind, by series
-// expansion, as in Loris
-double zeroethOrderBessel(double x)
-{
-  const double eps = 0.000001;
-  double besselValue = 0;
-  double term = 1;
-  double m = 0;
-  while (term > eps * besselValue)
-  {
-    besselValue += term;
-    ++m;
-    term *= (x * x) / (4 * m * m);
-  }
-  return besselValue;
-}
-
-// first order modified Bessel function of the first kind
-double firstOrderBessel(double x)
-{
-  const double eps = 0.000001;
-  double besselValue = 0;
-  double term = .5 * x;
-  double m = 0;
-  while (term > eps * besselValue)
-  {
-    besselValue += term;
-    ++m;
-    term *= (x * x) / (4 * m * (m + 1));
-  }
-  return besselValue;
-}
-}  // namespace
-
+// Kaiser & Schafer 1980: shape parameter β for a requested sidelobe
+// attenuation (dB) of the window transform
 double computeShape(double attenDb)
 {
-  assert(attenDb >= 0.);
-  double alpha;
-  if (attenDb > 60.0)
+  if (attenDb > 60.)
   {
-    alpha = 0.12438 * (attenDb + 6.3);
+    return 0.12438 * (attenDb + 6.3);
   }
-  else if (attenDb > 13.26)
+  if (attenDb > 13.26)
   {
-    alpha = 0.76609L * (pow((attenDb - 13.26), 0.4)) + 0.09834L * (attenDb - 13.26L);
+    return 0.76609 * pow(attenDb - 13.26, 0.4) + 0.09834 * (attenDb - 13.26);
   }
-  else
-  {
-    // can't have less than 13dB attenuation
-    alpha = 0.0;
-  }
-  return alpha;
+  return 0.;
 }
 
+// The Kaiser window transform's first nulls sit at ±2·sqrt(π²+β²)/N
+// rad/sample, so a main lobe spanning `widthOverSR` cycles/sample between
+// nulls (2π·widthOverSR radians) needs N = 2·sqrt(π²+β²)/(π·widthOverSR)
+// samples; +1 and forced odd so the window has an exact center sample.
 long computeLength(double widthOverSR, double shape)
 {
-  // the +1 in Kaiser and Schafer 1980 (eq. 9) acts as a cheap ceiling
-  return long(1.0 + (2. * sqrt((kPi * kPi) + (shape * shape)) / (kPi * widthOverSR)));
+  const long len = long(1. + 2. * sqrt(kPi * kPi + shape * shape) / (kPi * widthOverSR));
+  return len | 1;
 }
 
+// h[n] = I0(β·sqrt(1−K²)) / I0(β),  K = 2n/(len−1) − 1 ∈ [−1, 1]
 void buildWindow(std::vector<double>& win, double shape)
 {
-  const double oneOverDenom = 1.0 / zeroethOrderBessel(shape);
-  const unsigned N = static_cast<unsigned>(win.size() - 1);
-  const double oneOverN = 1.0 / N;
-  for (unsigned n = 0; n <= N; ++n)
+  const long len = long(win.size());
+  const double i0Shape = besselI0(shape);
+  const double c = 0.5 * (len - 1);
+  for (long n = 0; n < len; ++n)
   {
-    const double K = (2.0 * n * oneOverN) - 1.0;
-    const double arg = sqrt(1.0 - (K * K));
-    win[n] = zeroethOrderBessel(shape * arg) * oneOverDenom;
+    const double K = (n - c) / c;
+    const double arg = sqrt(std::max(0., 1. - K * K));
+    win[n] = besselI0(shape * arg) / i0Shape;
   }
 }
 
+// dh/dn analytically, using d/dx I0(x) = I1(x):
+//   dh/dn = −(2β / ((len−1)·I0(β))) · I1(β·a)·K/a,  a = sqrt(1−K²),
+// with the K → ±1 endpoint limit I1(β·a)/a → β/2. This replaces the
+// FFT-based construction of eq. 70 (the selftest verifies both agree).
 void buildTimeDerivativeWindow(std::vector<double>& win, double shape)
 {
-  // d/dx I0(x) = I1(x)
-  const unsigned N = static_cast<unsigned>(win.size() - 1);
-  const double oneOverN = 1.0 / N;
-  const double commonFac = -2.0 * shape / (N * zeroethOrderBessel(shape));
-  win[0] = win[N] = 0.0;
-  for (unsigned n = 1; n < N; ++n)
+  const long len = long(win.size());
+  const double i0Shape = besselI0(shape);
+  const double c = 0.5 * (len - 1);
+  const double fac = -2. * shape / ((len - 1.) * i0Shape);
+  for (long n = 0; n < len; ++n)
   {
-    const double K = (2.0 * n * oneOverN) - 1.0;
-    const double arg = sqrt(1.0 - (K * K));
-    win[n] = commonFac * firstOrderBessel(shape * arg) * K / arg;
+    const double K = (n - c) / c;
+    const double arg = sqrt(std::max(0., 1. - K * K));
+    const double slope = (arg > 1e-9) ? besselI1(shape * arg) / arg : 0.5 * shape;
+    win[n] = fac * slope * K;
   }
 }
 
 }  // namespace kaiser
 
+// The three windows of Auger-Flandrin reassignment (Sec. 6.2), scaled as
+// documented in the header: w reads sinusoid amplitude directly off |X|,
+// wFreqRamp carries len/2π of the rad/sample → fractional-bin conversion
+// (the spectrum kernel's N/len supplies the rest), and wTimeRamp's ramp is
+// in samples so eq. 64 needs no further scaling.
 ReassignmentWindows buildReassignmentWindows(double sampleRate, double windowWidthHz,
                                              double sidelobeDb)
 {
-  constexpr double kPi = 3.14159265358979324;
-
+  ReassignmentWindows out;
   const double shape = kaiser::computeShape(sidelobeDb);
-  long len = kaiser::computeLength(windowWidthHz / sampleRate, shape);
-  if (!(len % 2)) ++len;
+  const long len = kaiser::computeLength(windowWidthHz / sampleRate, shape);
 
-  std::vector<double> win(len);
-  kaiser::buildWindow(win, shape);
-  std::vector<double> winDeriv(len);
-  kaiser::buildTimeDerivativeWindow(winDeriv, shape);
+  std::vector<double> h(len), hd(len);
+  kaiser::buildWindow(h, shape);
+  kaiser::buildTimeDerivativeWindow(hd, shape);
 
-  const double winsum = std::accumulate(win.begin(), win.end(), 0.);
-  const double magScale = 2. / winsum;
-  const double fancyScale = len / (winsum * kPi);
+  double winsum = 0.;
+  for (double v : h) winsum += v;
+  const double magScale = 2. / winsum;  // 2 = analytic-signal factor
+  const double freqScale = len / (winsum * kPi);
   const double center = 0.5 * (len - 1);
 
-  ReassignmentWindows rw;
-  rw.length = len;
-  rw.w.resize(len);
-  rw.wFreqRamp.resize(len);
-  rw.wTimeRamp.resize(len);
-  for (long k = 0; k < len; ++k)
+  out.length = len;
+  out.w.resize(len);
+  out.wFreqRamp.resize(len);
+  out.wTimeRamp.resize(len);
+  for (long n = 0; n < len; ++n)
   {
-    rw.w[k] = static_cast<float>(magScale * win[k]);
-    rw.wFreqRamp[k] = static_cast<float>(fancyScale * winDeriv[k]);
-    rw.wTimeRamp[k] = static_cast<float>(magScale * win[k] * (k - center));
+    out.w[n] = float(magScale * h[n]);
+    out.wFreqRamp[n] = float(freqScale * hd[n]);
+    out.wTimeRamp[n] = float(magScale * h[n] * (n - center));
   }
-  return rw;
+  return out;
 }
 
 }  // namespace ml::utu

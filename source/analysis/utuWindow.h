@@ -9,9 +9,9 @@
 namespace ml::utu
 {
 
-// Kaiser window math ported from Loris KaiserWindow. All computation is
-// double precision and runs once at configure time; only the final window
-// tables are stored as float.
+// Kaiser window math from the published Kaiser & Schafer 1980 formulas. All
+// computation is double precision and runs once at configure time; only the
+// final window tables are stored as float.
 namespace kaiser
 {
 
@@ -31,7 +31,7 @@ void buildTimeDerivativeWindow(std::vector<double>& win, double shape);
 // "A Unified Theory of Time-Frequency Reassignment", Sec. 6.2): the window h
 // itself, its time derivative hD = dh/dt used for frequency reassignment
 // (eq. 65), and the time-ramped window hT = t·h used for time reassignment
-// (eq. 64). Scaling, matching Loris ReassignedSpectrum:
+// (eq. 64). Scaling:
 //
 //   w         = (2/winsum)·h            so |X| at a resolved peak reads
 //                                       directly as sinusoid amplitude

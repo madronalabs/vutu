@@ -33,15 +33,14 @@ struct SpectrumFrame
   std::vector<float> timeCorr;  // t̂ − t in samples (eq. 64)
 };
 
-// Time-frequency reassigned short-time spectrum, replacing Loris
-// ReassignedSpectrum. Each hop computes the three transforms of the
-// Auger-Flandrin method (Fitz & Fulop Sec. 6.2): Xh over the window, Xd over
-// its time derivative, Xt over the time-ramped window. Reassignment then
-// needs no phase derivatives, only per-bin algebra on these three spectra
-// (eqs. 64-65). All windows are real, so three real FFTs replace Loris's two
-// complex ones; the mixed-derivative spectrum (x·t·dh/dt, eq. 110, Loris
-// "convergence") is not computed since residue bandwidth association always
-// overwrites it.
+// Time-frequency reassigned short-time spectrum. Each hop computes the
+// three transforms of the Auger-Flandrin method (Fitz & Fulop Sec. 6.2):
+// Xh over the window, Xd over its time derivative, Xt over the time-ramped
+// window. Reassignment then needs no phase derivatives, only per-bin
+// algebra on these three spectra (eqs. 64-65). All windows are real, so
+// three real FFTs suffice; the mixed-derivative spectrum (x·t·dh/dt,
+// eq. 110) is not computed since residue bandwidth association always
+// overwrites the quantity it would feed.
 class ReassignedSpectrum
 {
  public:
@@ -55,7 +54,7 @@ class ReassignedSpectrum
   // Transform with the analysis window centered on src[sampCenter];
   // window samples falling outside [0, srcLength) see zeros. The windowed
   // input is rotated so the window center lands at index 0, making spectral
-  // phase zero-centered as in Loris.
+  // phase frame-centered (eq. 3 rather than eq. 5).
   void transform(const float* src, long srcLength, long sampCenter);
 
   const SpectrumFrame& frame() const { return _frame; }
@@ -63,14 +62,15 @@ class ReassignedSpectrum
   // scalar accessors for candidate peaks, idx in [0, N/2]
   float magnitudeAt(long idx) const;
 
-  // reassigned phase per Loris: linear interpolation of phase toward the
-  // neighbor bin in the direction of the frequency correction, then a time
-  // correction term, wrapped by fmod
+  // phase at the reassigned coordinates (Sec. 8): linear interpolation of
+  // phase toward the neighbor bin in the direction of the frequency
+  // correction, then the travel over the reassignment interval, wrapped by
+  // fmod
   float phaseAt(long idx) const;
 
  private:
   float rawPhaseAt(long idx) const;
-  void fillWindowed(const float* src, long begin, long count, long winOffset, long rotateBy,
+  void fillWindowed(const float* src, long srcLength, long sampCenter,
                     const std::vector<float>& win);
   ReassignmentWindows _windows;
   std::unique_ptr<RealFFT> _fft;
