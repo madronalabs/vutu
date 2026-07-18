@@ -234,7 +234,11 @@ target_compile_definitions(${target} PRIVATE ML_INCLUDE_SDL=1)
 # find SDL headers and libraries
 if(APPLE)
     # to use the SDL2 framework in /Library/Frameworks, do this:
-    find_package(SDL2 REQUIRED COMPONENTS SDL2)
+    find_package(SDL2 COMPONENTS SDL2)
+    if(NOT SDL2_FOUND)
+        message(WARNING "SDL2 not found: the Vutu app target will not build. "
+                        "utucompare and other non-app targets are unaffected.")
+    endif()
 elseif(WIN32)
         # it seems like there's no standard place to put the SDL dev tools on Windows.
         # we put them in an SDL dir alongside the main project directory.
@@ -289,31 +293,30 @@ target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
 
 #--------------------------------------------------------------------
-# utucompare: transition-only test harness comparing the analysis
-# rewrite against the old Loris library. Requires installed libloris
-# and a loris source checkout at ../loris. Delete this option (and
-# source/tools) once the old engine is no longer a useful reference.
+# utucompare: test and measurement harness for the analysis engine
+# (ground-truth selftests, auto-params, batch conversion, regression
+# scoring against golden renders).
 #--------------------------------------------------------------------
 
-option(VUTU_BUILD_TOOLS "build the utucompare test harness (needs old loris)" OFF)
-if(VUTU_BUILD_TOOLS AND APPLE)
+option(VUTU_BUILD_TOOLS "build the utucompare test harness" OFF)
+if(VUTU_BUILD_TOOLS)
     file(GLOB ANALYSIS_TOOL_SOURCES "${CMAKE_SOURCE_DIR}/source/analysis/*.cpp")
     add_executable(utucompare "${CMAKE_SOURCE_DIR}/source/tools/utuCompare.cpp"
                    ${ANALYSIS_TOOL_SOURCES})
-    target_compile_definitions(utucompare PRIVATE
-                   _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION=1)
     # std::filesystem (convert-dir) needs 10.15; this dev tool is not shipped
     set_target_properties(utucompare PROPERTIES
                    XCODE_ATTRIBUTE_MACOSX_DEPLOYMENT_TARGET "10.15")
+    if(APPLE AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        target_compile_options(utucompare PRIVATE -mmacosx-version-min=10.15)
+        target_link_options(utucompare PRIVATE -mmacosx-version-min=10.15)
+    endif()
     target_include_directories(utucompare PRIVATE
                    "${CMAKE_SOURCE_DIR}/source/analysis"
                    "${CMAKE_SOURCE_DIR}/source/external"
                    "${CMAKE_SOURCE_DIR}/source/common"
-                   "${CMAKE_SOURCE_DIR}/../loris/src"
                    ${MADRONALIB_INCLUDE_DIR}
                    ${MANZANITA_INCLUDE_DIR})
     target_link_libraries(utucompare PRIVATE
-                   "${CMAKE_INSTALL_FULL_LIBDIR}/libloris.a"
                    "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a"
                    "${MANZANITA_LIBRARY_DIR}/lib${manzanita_NAME}.a"
                    SndFile::sndfile)

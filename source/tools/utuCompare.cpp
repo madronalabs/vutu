@@ -2,17 +2,26 @@
 // vutu
 // Copyright (c) 2026 Madrona Labs LLC. http://www.madronalabs.com
 
-// utucompare: transition-only test and comparison harness for the vutu
-// analysis rewrite. Links the old Loris library as the reference engine.
-// Subcommands are added milestone by milestone.
+// utucompare: test and measurement harness for the vutu analysis engine.
+//
+//   selftest     ground-truth checks on synthetic signals with known answers;
+//                these pin the engine's sign conventions, scaling, and model
+//                invariants without reference to any other implementation
+//   auto-test    automatic analysis-parameter estimation
+//   convert-dir  batch auto-analyze + resynthesize, with .utu partials output
+//   ab-dir       score the current engine against golden renders of the
+//                same sources (regression gate for engine rewrites)
+//   score, tune  reconstruction metrics and parameter search
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <random>
 #include <string>
 #include <vector>
@@ -28,29 +37,21 @@
 #include "utuBandwidth.h"
 #include "utuMetrics.h"
 #include "utuPeaks.h"
+#include "utuPhaseFix.h"
 #include "utuSynth.h"
-
-// old Loris, reference engine
-#include "Analyzer.h"
-#include "AssociateBandwidth.h"
-#include "KaiserWindow.h"
-#include "Partial.h"
-#include "PartialList.h"
-#include "ReassignedSpectrum.h"
-#include "SpectralPeakSelector.h"
-#include "Synthesizer.h"
+#include "utuTracker.h"
 
 namespace
 {
 
 constexpr double kPi = 3.14159265358979324;
+constexpr double kTwoPi = 2. * kPi;
 
 // sample rate for the synthetic @ test signals
 constexpr double kSyntheticRate = 44100.;
 
 // ---------------------------------------------------------------------------
-// audio file I/O via libsndfile (aiff and wav, correct sample rates —
-// the old Loris AiffFile reader misparses the 80-bit rate on this build)
+// audio file I/O via libsndfile (aiff and wav, correct sample rates)
 
 bool loadAudio(const char* path, std::vector<float>& out, double& sr)
 {
@@ -82,897 +83,862 @@ bool writeAudio(const std::string& path, const float* x, size_t n, double sr, in
 }
 
 // ---------------------------------------------------------------------------
-// fft-test: RealFFT vs naive double-precision DFT
+// selftest: ground-truth checks on synthetic signals
+//
+// Every test here has an answer known from first principles (an ideal
+// sinusoid's frequency, an impulse's position, an energy-conservation
+// identity), so the tests pin down the engine's conventions — reassignment
+// signs, magnitude scaling, phase reference — rather than inheriting them
+// from a reference implementation. Tolerances marked (cal) were locked by
+// measuring the v2 engine and adding roughly 2x headroom; the rest are
+// defensible a priori from the math and float precision.
 
-double dftCompare(ml::utu::RealFFT& fft, const std::vector<float>& x)
+namespace tol
 {
-  const long n = fft.length();
-  const long nBins = fft.bins();
-  std::vector<float> re(nBins), im(nBins);
-  fft.forward(x.data(), re.data(), im.data());
+// windows
+constexpr double kWindowSym = 1e-6;      // symmetry/antisymmetry, rel to max
+constexpr double kWindowSum = 1e-4;      // |Σw − 2|
+// the Bessel series behind the Kaiser tables truncates at 1e-6 relative, so
+// derivative cross-checks bottom out near 1e-4 of max |hD|, not machine eps
+// (v2 measured: FD 5.5e-5, eq. 70 7.3e-5)
+constexpr double kHdFiniteDiff = 2e-4;   // (cal) analytic hD vs 8th-order FD
+constexpr double kHdEq70 = 3e-4;         // (cal) analytic hD vs eq. 70 route
+// spectrum
+constexpr double kImpulseTimeSamp = 0.5;  // |timeCorr − true offset|, samples
+constexpr double kImpulseFreqBins = 0.1;  // |freqCorr| at an impulse, bins
+// full pipeline, stationary sine (v2: err 0.0002-0.0003 Hz, amp 0.03 dB,
+// dispersion 0.0003 rad; dozens of sub--40 dB junk partials near the floor
+// are normal, so assertions are energy-based, never count-based)
+constexpr double kSineFreqHz = 0.01;
+constexpr double kSineAmpDb = 0.3;       // (cal)
+constexpr double kSinePhaseDisp = 0.05;  // (cal) dispersion about the mean offset
+constexpr double kSine96FreqHz = 0.02;   // (cal)
+constexpr double kEnergyFrac = 0.99;     // (cal) dominant-partial energy share
+// chirp (v2: RMS 0.34 Hz)
+constexpr double kChirpRmsHz = 1.0;  // (cal)
+// crop gate (v2: spread ~0 both sides)
+constexpr double kBurstMarginSec = 0.020;  // (cal) 2.5 hops + slack at W=160
+// two-sine
+constexpr double kTwoSineFreqHz = 0.1;
+constexpr double kSignificantDb = -40.;  // partial-energy significance cut
+// noise (v2: mean bw 0.169 — kept peaks carry most noise as sinusoids; this
+// pins that bandwidth association keeps working at all, not a noise model)
+constexpr double kNoiseMeanBw = 0.10;     // (cal)
+constexpr double kNoiseRmsDevDb = 3.0;    // (cal) render vs source RMS
+constexpr double kResidueGateRel = 1e-5;  // gate identity, rel
+// phase fix
+constexpr double kPhaseFixRad = 0.01;
+constexpr double kMaxFixPct = 0.2;  // engine default, percent
+// synth (v2: null -118 dB, amp dev 0.000 dB)
+constexpr double kSynthNullDb = -60.;   // (cal)
+constexpr double kSynthAmpDb = 0.2;     // (cal)
+// roundtrip (v2: spectral 0.88 dB, rustle 0.00, null -55.8 dB. The watery
+// metric is asserted nowhere here: it normalizes by the source's envelope
+// modulation, which is ~zero for a pure tone, so it explodes on this signal)
+constexpr double kRoundtripSpectral = 1.5;  // (cal) dB
+constexpr double kRoundtripRustle = 0.5;    // (cal) dB
+constexpr double kRoundtripNullDb = -40.;   // (cal)
+}  // namespace tol
 
-  // reference DFT in double
-  double maxMag = 0.;
-  std::vector<double> refRe(nBins, 0.), refIm(nBins, 0.);
-  for (long k = 0; k < nBins; ++k)
+// The engine's phase reference, measured on the v2 engine during M1
+// calibration: breakpoint phase is the phase of the analytic signal, i.e.
+// x = A·cos(phase), so a sin input measures stored − 2πft = −π/2 (exactly
+// -1.5708 at both 44.1k and 96k), and a rendered partial with stored phase 0
+// fits sin(ωt + π/2).
+constexpr bool kPhaseOffsetPinned = true;
+constexpr double kPhaseOffset = -kPi / 2.;
+constexpr double kSynthPhaseRef = kPi / 2.;
+
+std::vector<float> makeSine(double freq, float amp, double seconds, double sr)
+{
+  // accumulate phase in double: sinf(2π·f·i) loses all precision once the
+  // argument grows past ~1e7
+  std::vector<float> x(size_t(seconds * sr));
+  double phase = 0.;
+  const double inc = kTwoPi * freq / sr;
+  for (auto& s : x)
   {
-    for (long i = 0; i < n; ++i)
+    s = amp * float(sin(phase));
+    phase += inc;
+  }
+  return x;
+}
+
+// analyze with explicit window-first parameters and the production
+// post-processing (cleanOutliers, stats)
+std::unique_ptr<ml::VutuPartialsData> analyzeSimple(const std::vector<float>& x, double sr,
+                                                    float windowWidth,
+                                                    float bwRegionWidth = 2000.f)
+{
+  ml::utu::AnalyzerParams p;
+  p.sampleRate = float(sr);
+  p.windowWidth = windowWidth;
+  p.resolution = windowWidth * 0.5f;
+  p.bwRegionWidth = bwRegionWidth;
+  auto partials = ml::utu::analyzeToPartials(x.data(), x.size(), p);
+  ml::cleanOutliers(*partials);
+  if (!partials->partials.empty()) ml::calcStats(*partials);
+  return partials;
+}
+
+double partialEnergy(const ml::VutuPartial& p)
+{
+  double e = 0.;
+  for (float a : p.amp) e += double(a) * a;
+  return e;
+}
+
+size_t dominantPartial(const ml::VutuPartialsData& pd)
+{
+  size_t best = 0;
+  double bestEnergy = -1.;
+  for (size_t i = 0; i < pd.partials.size(); ++i)
+  {
+    const double e = partialEnergy(pd.partials[i]);
+    if (e > bestEnergy)
     {
-      const double w = 2. * kPi * k * i / n;
-      refRe[k] += x[i] * cos(w);
-      refIm[k] -= x[i] * sin(w);
+      bestEnergy = e;
+      best = i;
     }
-    maxMag = std::max(maxMag, sqrt(refRe[k] * refRe[k] + refIm[k] * refIm[k]));
+  }
+  return best;
+}
+
+// energy share of the n loudest partials — the robust way to say "this
+// signal is one (or two) components": junk partials near the amplitude floor
+// are numerous but energetically nothing
+double dominantEnergyFraction(const ml::VutuPartialsData& pd, int n)
+{
+  std::vector<double> e;
+  double total = 0.;
+  for (const auto& P : pd.partials)
+  {
+    e.push_back(partialEnergy(P));
+    total += e.back();
+  }
+  std::sort(e.begin(), e.end(), std::greater<double>());
+  double top = 0.;
+  for (int i = 0; i < n && i < int(e.size()); ++i) top += e[i];
+  return total > 0. ? top / total : 0.;
+}
+
+// partials within kSignificantDb of the loudest, by energy
+std::vector<size_t> significantPartials(const ml::VutuPartialsData& pd)
+{
+  std::vector<double> e;
+  double maxE = 0.;
+  for (const auto& P : pd.partials)
+  {
+    e.push_back(partialEnergy(P));
+    maxE = std::max(maxE, e.back());
+  }
+  const double cut = maxE * pow(10., tol::kSignificantDb / 10.);
+  std::vector<size_t> idx;
+  for (size_t i = 0; i < e.size(); ++i)
+    if (e[i] >= cut) idx.push_back(i);
+  return idx;
+}
+
+// maximum number of significant partials sounding at once (overlaps shorter
+// than minOverlapSec — track handoffs at a beat null — don't count)
+size_t maxSimultaneousSignificant(const ml::VutuPartialsData& pd,
+                                  const std::vector<size_t>& sig, double minOverlapSec)
+{
+  size_t worst = 0;
+  for (size_t a : sig)
+  {
+    const auto& A = pd.partials[a];
+    size_t overlapping = 1;
+    for (size_t b : sig)
+    {
+      if (a == b) continue;
+      const auto& B = pd.partials[b];
+      const double lo = std::max(double(A.time.front()), double(B.time.front()));
+      const double hi = std::min(double(A.time.back()), double(B.time.back()));
+      if (hi - lo > minOverlapSec) ++overlapping;
+    }
+    worst = std::max(worst, overlapping);
+  }
+  return worst;
+}
+
+// least-squares fit of a·cos + b·sin at freq over [n0, n1); returns fitted
+// amplitude and phase (x ≈ amp·sin(ωn + phase)), and the residual RMS
+void fitSinusoid(const std::vector<float>& x, size_t n0, size_t n1, double freq, double sr,
+                 double& ampOut, double& phaseOut, double& residRmsOut, double& signalRmsOut)
+{
+  const double w = kTwoPi * freq / sr;
+  double sc = 0., ss = 0.;
+  for (size_t n = n0; n < n1; ++n)
+  {
+    sc += x[n] * cos(w * double(n));
+    ss += x[n] * sin(w * double(n));
+  }
+  const double count = double(n1 - n0);
+  const double a = 2. * sc / count;  // cos coefficient
+  const double b = 2. * ss / count;  // sin coefficient
+  double resid = 0., sig = 0.;
+  for (size_t n = n0; n < n1; ++n)
+  {
+    const double fit = a * cos(w * double(n)) + b * sin(w * double(n));
+    const double d = x[n] - fit;
+    resid += d * d;
+    sig += double(x[n]) * x[n];
+  }
+  ampOut = sqrt(a * a + b * b);
+  // x = amp·(sin(ωn)·b/amp + cos(ωn)·a/amp) = amp·sin(ωn + atan2(a, b))
+  phaseOut = atan2(a, b);
+  residRmsOut = sqrt(resid / count);
+  signalRmsOut = sqrt(sig / count);
+}
+
+// --- window tests ----------------------------------------------------------
+
+bool testWindowShape()
+{
+  const auto wins = ml::utu::buildReassignmentWindows(44100., 160., 90.);
+  const long L = wins.length;
+  bool ok = true;
+  if (!(L & 1) || long(wins.w.size()) != L || long(wins.wFreqRamp.size()) != L ||
+      long(wins.wTimeRamp.size()) != L)
+  {
+    printf("  bad lengths: L %ld sizes %zu %zu %zu\n", L, wins.w.size(), wins.wFreqRamp.size(),
+           wins.wTimeRamp.size());
+    return false;
+  }
+  double maxW = 0., maxF = 0., maxT = 0.;
+  for (long k = 0; k < L; ++k)
+  {
+    maxW = std::max(maxW, fabs(double(wins.w[k])));
+    maxF = std::max(maxF, fabs(double(wins.wFreqRamp[k])));
+    maxT = std::max(maxT, fabs(double(wins.wTimeRamp[k])));
+  }
+  double symW = 0., asymF = 0., asymT = 0., ramp = 0., sum = 0.;
+  const double c = 0.5 * (L - 1);
+  for (long k = 0; k < L; ++k)
+  {
+    symW = std::max(symW, fabs(double(wins.w[k]) - wins.w[L - 1 - k]) / maxW);
+    asymF = std::max(asymF, fabs(double(wins.wFreqRamp[k]) + wins.wFreqRamp[L - 1 - k]) / maxF);
+    asymT = std::max(asymT, fabs(double(wins.wTimeRamp[k]) + wins.wTimeRamp[L - 1 - k]) / maxT);
+    ramp = std::max(ramp, fabs(double(wins.wTimeRamp[k]) - wins.w[k] * (k - c)) / maxT);
+    sum += wins.w[k];
+  }
+  printf("  L %ld, sym(w) %.2e, asym(hD) %.2e, asym(hT) %.2e, ramp %.2e, Σw %.6f\n", L, symW,
+         asymF, asymT, ramp, sum);
+  ok &= symW < tol::kWindowSym;
+  ok &= asymF < tol::kWindowSym;
+  ok &= asymT < tol::kWindowSym;
+  ok &= ramp < tol::kWindowSym;
+  ok &= fabs(sum - 2.) < tol::kWindowSum;
+  return ok;
+}
+
+bool testWindowHd()
+{
+  // W = 320 keeps the naive-DFT eq. 70 cross-check affordable
+  const double shape = ml::utu::kaiser::computeShape(90.);
+  const long len = ml::utu::kaiser::computeLength(320. / 44100., shape);
+  std::vector<double> h(len), hd(len);
+  ml::utu::kaiser::buildWindow(h, shape);
+  ml::utu::kaiser::buildTimeDerivativeWindow(hd, shape);
+  double maxHd = 0.;
+  for (double v : hd) maxHd = std::max(maxHd, fabs(v));
+
+  // (a) analytic derivative vs 8th-order central finite difference, interior
+  static const double fd[4] = {4. / 5., -1. / 5., 4. / 105., -1. / 280.};
+  double fdErr = 0.;
+  for (long k = 4; k < len - 4; ++k)
+  {
+    double d = 0.;
+    for (int m = 1; m <= 4; ++m) d += fd[m - 1] * (h[k + m] - h[k - m]);
+    fdErr = std::max(fdErr, fabs(d - hd[k]) / maxHd);
   }
 
+  // (b) the paper's eq. 70 construction: hD = IDFT{ jω_k · DFT(h) }, real part
+  long N = 1;
+  while (N < 2 * len) N <<= 1;
+  std::vector<double> Hre(N, 0.), Him(N, 0.);
+  for (long k = 0; k < N; ++k)
+  {
+    double re = 0., im = 0.;
+    for (long n = 0; n < len; ++n)
+    {
+      const double a = kTwoPi * k * n / N;
+      re += h[n] * cos(a);
+      im -= h[n] * sin(a);
+    }
+    Hre[k] = re;
+    Him[k] = im;
+  }
+  // multiply by jω with signed frequency; Nyquist term zeroed for symmetry
+  std::vector<double> Gre(N), Gim(N);
+  for (long k = 0; k < N; ++k)
+  {
+    double w = kTwoPi * ((k < N / 2) ? k : (k == N / 2 ? 0 : k - N)) / N;
+    Gre[k] = -w * Him[k];
+    Gim[k] = w * Hre[k];
+  }
+  double eqErr = 0.;
+  const long lo = len / 10, hi = len - len / 10;
+  for (long n = lo; n < hi; ++n)
+  {
+    double re = 0.;
+    for (long k = 0; k < N; ++k)
+    {
+      const double a = kTwoPi * k * n / N;
+      re += Gre[k] * cos(a) - Gim[k] * sin(a);
+    }
+    eqErr = std::max(eqErr, fabs(re / N - hd[n]) / maxHd);
+  }
+  printf("  len %ld, FD err %.2e, eq.70 err (interior) %.2e (rel to max |hD|)\n", len, fdErr,
+         eqErr);
+  return (fdErr < tol::kHdFiniteDiff) && (eqErr < tol::kHdEq70);
+}
+
+// --- spectrum tests --------------------------------------------------------
+
+bool testImpulseTime()
+{
+  const double sr = 44100.;
+  auto wins = ml::utu::buildReassignmentWindows(sr, 160., 90.);
+  ml::utu::ReassignedSpectrum spec;
+  spec.configure(wins);
+  const long L = spec.windowLength();
+  const long bins = spec.bins();
+  std::vector<float> x(3 * L, 0.f);
+  const long s0 = 3 * L / 2;
+  x[s0] = 1.f;
+
+  const long offsets[] = {-137, -41, 0, 29, 137};  // within ±hop/2 at W=160
+  bool ok = true;
+  double worstTime = 0., worstFreq = 0.;
+  for (long d : offsets)
+  {
+    spec.transform(x.data(), long(x.size()), s0 + d);
+    const auto& f = spec.frame();
+    float maxMag = 0.f;
+    for (long k = 0; k < bins; ++k) maxMag = std::max(maxMag, f.magSq[k]);
+    // an impulse has equal energy in every bin; expected t̂ − t = s0 − center
+    const double expected = double(-d);
+    for (long k = 16; k < bins - 16; ++k)
+    {
+      if (f.magSq[k] < 1e-6f * maxMag) continue;
+      worstTime = std::max(worstTime, fabs(f.timeCorr[k] - expected));
+      worstFreq = std::max(worstFreq, fabs(double(f.freqCorr[k])));
+    }
+  }
+  printf("  worst |timeCorr err| %.4f samples, worst |freqCorr| %.4f bins\n", worstTime,
+         worstFreq);
+  ok &= worstTime < tol::kImpulseTimeSamp;
+  ok &= worstFreq < tol::kImpulseFreqBins;
+  return ok;
+}
+
+// --- full-pipeline tests ---------------------------------------------------
+
+bool sineChecks(double sr, double f0, float amp, double seconds, double freqTolHz,
+                bool checkPhase)
+{
+  auto x = makeSine(f0, amp, seconds, sr);
+  auto pd = analyzeSimple(x, sr, 160.f);
+  if (pd->partials.empty())
+  {
+    printf("  no partials\n");
+    return false;
+  }
+  const double frac = dominantEnergyFraction(*pd, 1);
+  bool ok = frac > tol::kEnergyFrac;
+  const auto& P = pd->partials[dominantPartial(*pd)];
+  const double t0 = 0.15 * seconds, t1 = 0.85 * seconds;
+  double maxFreqErr = 0., maxAmpDevDb = 0.;
+  std::vector<double> phaseDiffs;
+  for (size_t i = 0; i < P.time.size(); ++i)
+  {
+    const double t = P.time[i];
+    if (t < t0 || t > t1) continue;
+    maxFreqErr = std::max(maxFreqErr, fabs(double(P.freq[i]) - f0));
+    maxAmpDevDb = std::max(maxAmpDevDb, fabs(20. * log10(double(P.amp[i]) / amp)));
+    phaseDiffs.push_back(ml::utu::wrapPi(double(P.phase[i]) - kTwoPi * f0 * t));
+  }
+  if (phaseDiffs.empty())
+  {
+    printf("  no interior breakpoints\n");
+    return false;
+  }
+  double ss = 0., cc = 0.;
+  for (double d : phaseDiffs)
+  {
+    ss += sin(d);
+    cc += cos(d);
+  }
+  const double meanOff = atan2(ss, cc);
+  double disp = 0.;
+  for (double d : phaseDiffs) disp = std::max(disp, fabs(ml::utu::wrapPi(d - meanOff)));
+  printf(
+      "  %zu partials (dominant energy %.5f), freq err %.4f Hz, amp dev %.3f dB,\n"
+      "  phase offset %.4f rad (dispersion %.4f) over %zu breakpoints\n",
+      pd->partials.size(), frac, maxFreqErr, maxAmpDevDb, meanOff, disp, phaseDiffs.size());
+  ok &= maxFreqErr < freqTolHz;
+  ok &= maxAmpDevDb < tol::kSineAmpDb;
+  if (checkPhase)
+  {
+    ok &= disp < tol::kSinePhaseDisp;
+    if (kPhaseOffsetPinned)
+      ok &= fabs(ml::utu::wrapPi(meanOff - kPhaseOffset)) < 0.1;
+  }
+  return ok;
+}
+
+bool testSine() { return sineChecks(44100., 441.3, 0.5f, 3.0, tol::kSineFreqHz, true); }
+bool testSine96() { return sineChecks(96000., 441.3, 0.5f, 2.0, tol::kSine96FreqHz, false); }
+
+bool testChirp()
+{
+  const double sr = 44100.;
+  const double fStart = 1000., rate = 1000.;  // Hz, Hz/s
+  const double seconds = 2.0;
+  std::vector<float> x(size_t(seconds * sr));
+  double phase = 0.;
+  for (size_t n = 0; n < x.size(); ++n)
+  {
+    const double t = n / sr;
+    x[n] = 0.5f * float(sin(phase));
+    phase += kTwoPi * (fStart + rate * t) / sr;
+  }
+  auto pd = analyzeSimple(x, sr, 160.f);
+  if (pd->partials.empty())
+  {
+    printf("  no partials\n");
+    return false;
+  }
+  const auto& P = pd->partials[dominantPartial(*pd)];
+  double sumSq = 0.;
+  long n = 0;
   double maxErr = 0.;
-  for (long k = 0; k < nBins; ++k)
+  for (size_t i = 0; i < P.time.size(); ++i)
   {
-    const double dr = re[k] - refRe[k];
-    const double di = im[k] - refIm[k];
-    maxErr = std::max(maxErr, sqrt(dr * dr + di * di));
+    const double t = P.time[i];
+    if (t < 0.3 || t > 1.7) continue;
+    // instantaneous frequency at the breakpoint's reassigned time — this
+    // couples the frequency and time reassignment signs
+    const double fTrue = fStart + rate * t;
+    const double e = double(P.freq[i]) - fTrue;
+    sumSq += e * e;
+    maxErr = std::max(maxErr, fabs(e));
+    ++n;
   }
-  return maxErr / maxMag;
+  if (!n)
+  {
+    printf("  no interior breakpoints\n");
+    return false;
+  }
+  const double rms = sqrt(sumSq / n);
+  const double frac = dominantEnergyFraction(*pd, 1);
+  printf("  %zu partials (dominant energy %.5f), freq err RMS %.3f Hz, max %.3f Hz over %ld bps\n",
+         pd->partials.size(), frac, rms, maxErr, n);
+  return (frac > tol::kEnergyFrac) && (rms < tol::kChirpRmsHz);
 }
 
-int fftTest()
+bool testCropBurst()
 {
-  std::mt19937 gen(42);
-  std::uniform_real_distribution<float> dist(-1.f, 1.f);
-  const double tol = 1e-5;
-  int failures = 0;
-
-  for (long n : {512L, 1024L, 4096L, 16384L})
+  // a short tone burst must yield breakpoints only near the burst: frames
+  // centered farther away see the energy only through large time
+  // reassignment, which the crop gate rejects (Sec. 7 pruning). Without the
+  // gate, smear would extend to half a window length (~25 ms at W=160).
+  const double sr = 44100.;
+  const double hopSec = 1. / 160.;
+  const double burstStart = 1.0, burstLen = 4. * hopSec;
+  std::vector<float> x(size_t(2.0 * sr), 0.f);
+  double phase = 0.;
+  const double inc = kTwoPi * 800. / sr;
+  for (size_t n = size_t(burstStart * sr); n < size_t((burstStart + burstLen) * sr); ++n)
   {
-    ml::utu::RealFFT fft(n);
-
-    // impulse, off-bin sine, and noise
-    std::vector<float> impulse(n, 0.f);
-    impulse[3] = 1.f;
-    std::vector<float> sine(n);
-    for (long i = 0; i < n; ++i) sine[i] = 0.5f * sinf(2.f * float(kPi) * 17.37f * i / n);
-    std::vector<float> noise(n);
-    for (auto& v : noise) v = dist(gen);
-
-    for (auto* sig : {&impulse, &sine, &noise})
-    {
-      double err = dftCompare(fft, *sig);
-      const char* name = (sig == &impulse) ? "impulse" : (sig == &sine) ? "sine" : "noise";
-      bool ok = err < tol;
-      if (!ok) ++failures;
-      printf("  N=%5ld %-7s rel err %.3g %s\n", n, name, err, ok ? "OK" : "FAIL");
-    }
+    x[n] = 0.5f * float(sin(phase));
+    phase += inc;
   }
-  printf("fft-test: %s\n", failures ? "FAIL" : "PASS");
-  return failures ? 1 : 0;
+  auto pd = analyzeSimple(x, sr, 160.f);
+  if (pd->partials.empty())
+  {
+    printf("  no partials — burst not detected\n");
+    return false;
+  }
+  double minT = 1e9, maxT = -1e9;
+  for (const auto& P : pd->partials)
+    for (float t : P.time)
+    {
+      minT = std::min(minT, double(t));
+      maxT = std::max(maxT, double(t));
+    }
+  const double before = burstStart - minT;
+  const double after = maxT - (burstStart + burstLen);
+  printf("  %zu partials, spread %.1f ms before, %.1f ms after (margin %.1f ms)\n",
+         pd->partials.size(), before * 1000., after * 1000., tol::kBurstMarginSec * 1000.);
+  return (before < tol::kBurstMarginSec) && (after < tol::kBurstMarginSec);
 }
 
-// ---------------------------------------------------------------------------
-// window-test: kaiser port + scaled reassignment windows vs Loris
-
-int windowTest()
+bool testTwoSine()
 {
-  const double tolShape = 1e-12;
-  const double tolWin = 1e-12;
-  const float tolScaled = 1e-6f;
-  int failures = 0;
+  // unequal amplitudes so the merged pair's beat envelope never touches the
+  // amplitude floor (equal amps null completely and fragment any tracker)
+  const double sr = 44100.;
+  const double W = 160.;
+  const double hopSec = 1. / W;
+  bool ok = true;
 
-  for (double sr : {44100., 48000., 96000.})
+  // resolved: spacing 1.5·W — two simultaneous partials at the true
+  // frequencies (separability, Sec. 5)
   {
-    for (double widthHz : {50., 100., 184.5, 400., 1000., 3200.})
+    auto x = makeSine(440., 0.3f, 2.0, sr);
+    auto y = makeSine(440. + 1.5 * W, 0.15f, 2.0, sr);
+    for (size_t i = 0; i < x.size(); ++i) x[i] += y[i];
+    auto pd = analyzeSimple(x, sr, float(W));
+    const auto sig = significantPartials(*pd);
+    const size_t simul = maxSimultaneousSignificant(*pd, sig, 2. * hopSec);
+    if (sig.size() != 2 || simul != 2)
     {
-      for (double sidelobeDb : {60., 80., 90., 95.})
-      {
-        // shape and length must match Loris exactly
-        const double shape = ml::utu::kaiser::computeShape(sidelobeDb);
-        const double lorisShape = Loris::KaiserWindow::computeShape(sidelobeDb);
-        if (fabs(shape - lorisShape) > tolShape * std::max(1., fabs(lorisShape)))
-        {
-          printf("  shape mismatch: %g vs %g (sidelobe %g)\n", shape, lorisShape, sidelobeDb);
-          ++failures;
-        }
-
-        long len = ml::utu::kaiser::computeLength(widthHz / sr, shape);
-        const long lorisLen = long(Loris::KaiserWindow::computeLength(widthHz / sr, lorisShape));
-        if (len != lorisLen)
-        {
-          printf("  length mismatch: %ld vs %ld (sr %g width %g)\n", len, lorisLen, sr, widthHz);
-          ++failures;
-        }
-        if (!(len % 2)) ++len;
-
-        // raw windows must match Loris to double precision
-        std::vector<double> win(len), winDeriv(len);
-        ml::utu::kaiser::buildWindow(win, shape);
-        ml::utu::kaiser::buildTimeDerivativeWindow(winDeriv, shape);
-        std::vector<double> lorisWin(len), lorisDeriv(len);
-        Loris::KaiserWindow::buildWindow(lorisWin, lorisShape);
-        Loris::KaiserWindow::buildTimeDerivativeWindow(lorisDeriv, lorisShape);
-        double maxErr = 0.;
-        for (long k = 0; k < len; ++k)
-        {
-          maxErr = std::max(maxErr, fabs(win[k] - lorisWin[k]));
-          maxErr = std::max(maxErr, fabs(winDeriv[k] - lorisDeriv[k]));
-        }
-        if (maxErr > tolWin)
-        {
-          printf("  window mismatch: max err %.3g (sr %g width %g sidelobe %g)\n", maxErr, sr,
-                 widthHz, sidelobeDb);
-          ++failures;
-        }
-
-        // scaled float windows vs the same scaling done in double on the
-        // Loris windows (the Loris scaling itself lives inside
-        // ReassignedSpectrum; replicate it here per ReassignedSpectrum.C:644)
-        auto rw = ml::utu::buildReassignmentWindows(sr, widthHz, sidelobeDb);
-        if (rw.length != len)
-        {
-          printf("  reassignment window length mismatch: %ld vs %ld\n", rw.length, len);
-          ++failures;
-          continue;
-        }
-        double winsum = 0.;
-        for (auto v : lorisWin) winsum += v;
-        const double magScale = 2. / winsum;
-        const double fancyScale = len / (winsum * kPi);
-        const double center = 0.5 * (len - 1);
-        float maxScaledErr = 0.f;
-        for (long k = 0; k < len; ++k)
-        {
-          maxScaledErr =
-              std::max(maxScaledErr, fabsf(rw.w[k] - float(magScale * lorisWin[k])));
-          maxScaledErr = std::max(maxScaledErr,
-                                  fabsf(rw.wFreqRamp[k] - float(fancyScale * lorisDeriv[k])));
-          maxScaledErr = std::max(
-              maxScaledErr,
-              fabsf(rw.wTimeRamp[k] - float(magScale * lorisWin[k] * (k - center))));
-        }
-        if (maxScaledErr > tolScaled)
-        {
-          printf("  scaled window mismatch: max err %.3g (sr %g width %g sidelobe %g)\n",
-                 maxScaledErr, sr, widthHz, sidelobeDb);
-          ++failures;
-        }
-      }
-    }
-  }
-  printf("window-test: %s\n", failures ? "FAIL" : "PASS");
-  return failures ? 1 : 0;
-}
-
-// ---------------------------------------------------------------------------
-// spectrum-test: reassigned spectrum vs Loris on real audio (M2 + M3)
-
-int spectrumTest(const char* path)
-{
-  std::vector<float> samplesF;
-  double sr = 0.;
-  if (!loadAudio(path, samplesF, sr)) return 2;
-  std::vector<double> samplesD(samplesF.begin(), samplesF.end());
-  const long nSamples = long(samplesD.size());
-  printf("%s: %ld samples at %g Hz\n", path, nSamples, sr);
-
-  // vutu-typical analysis setup: resolution 80 Hz, window width 160 Hz
-  const double widthHz = 160.;
-  const double sidelobeDb = 90.;
-
-  // Loris reference spectrum, built exactly as Analyzer::analyze does
-  const double shape = Loris::KaiserWindow::computeShape(sidelobeDb);
-  long winlen = long(Loris::KaiserWindow::computeLength(widthHz / sr, shape));
-  if (!(winlen % 2)) ++winlen;
-  std::vector<double> win(winlen), winDeriv(winlen);
-  Loris::KaiserWindow::buildWindow(win, shape);
-  Loris::KaiserWindow::buildTimeDerivativeWindow(winDeriv, shape);
-  Loris::ReassignedSpectrum lorisSpectrum(win, winDeriv);
-
-  ml::utu::ReassignedSpectrum spectrum;
-  spectrum.configure(ml::utu::buildReassignmentWindows(sr, widthHz, sidelobeDb));
-  if (spectrum.windowLength() != winlen)
-  {
-    printf("window length mismatch: %ld vs %ld\n", spectrum.windowLength(), winlen);
-    return 1;
-  }
-  const long n = spectrum.fftSize();
-  const long half = winlen / 2;
-  printf("winlen %ld, fft size %ld\n", winlen, n);
-
-  const long hopSamples = long((1. / widthHz) * sr);
-  const double* bufBegin = samplesD.data();
-  const double* bufEnd = bufBegin + nSamples;
-
-  // corrections are ratios with |Xh|² denominators, so their float error
-  // grows as bins approach the spectral floor; bucket the comparison by
-  // level below the frame peak
-  struct Bucket
-  {
-    const char* name;
-    double loDb;  // bucket holds bins in (loDb, hiDb] below peak
-    double hiDb;
-    double maxMagRelErr{0}, maxFreqCorrErr{0}, maxTimeCorrErr{0}, maxPhaseErr{0};
-    long bins{0};
-  };
-  Bucket buckets[3] = {{"  0..-40dB", -40., 0., 0, 0, 0, 0, 0},
-                       {"-40..-60dB", -60., -40., 0, 0, 0, 0, 0},
-                       {"-60..-90dB", -90., -60., 0, 0, 0, 0, 0}};
-  long frames = 0, binsCompared = 0;
-  for (long center = 0; center < nSamples; center += hopSamples, ++frames)
-  {
-    const double* winMiddle = bufBegin + center;
-    const double* sampsBegin = std::max(winMiddle - half, bufBegin);
-    const double* sampsEnd = std::min(winMiddle + half + 1, bufEnd);
-    lorisSpectrum.transform(sampsBegin, winMiddle, sampsEnd);
-    spectrum.transform(samplesF.data(), nSamples, center);
-
-    double framePeak = 0.;
-    for (long k = 0; k <= n / 2; ++k)
-    {
-      framePeak = std::max(framePeak, lorisSpectrum.reassignedMagnitude(k));
-    }
-    if (framePeak < 1e-7) continue;  // silent frame
-    const double magFloor = framePeak * 3.16e-5;  // -90 dB
-
-    for (long k = 1; k < n / 2; ++k)
-    {
-      const double lorisMag = lorisSpectrum.reassignedMagnitude(k);
-      if (lorisMag < magFloor) continue;
-      ++binsCompared;
-      const double db = 20. * log10(lorisMag / framePeak);
-      Bucket& b = (db > -40.) ? buckets[0] : (db > -60.) ? buckets[1] : buckets[2];
-      ++b.bins;
-
-      b.maxMagRelErr =
-          std::max(b.maxMagRelErr, fabs(spectrum.magnitudeAt(k) - lorisMag) / lorisMag);
-      const double lorisFreqCorr = lorisSpectrum.reassignedFrequency(k) - double(k);
-      const double lorisTimeCorr = lorisSpectrum.reassignedTime(k);
-      b.maxFreqCorrErr =
-          std::max(b.maxFreqCorrErr, fabs(spectrum.frame().freqCorr[k] - lorisFreqCorr));
-      b.maxTimeCorrErr =
-          std::max(b.maxTimeCorrErr, fabs(spectrum.frame().timeCorr[k] - lorisTimeCorr));
-
-      // compare phases only where the correction terms are moderate, as at
-      // real peaks; phase wraps make direct comparison meaningless when the
-      // time correction is large
-      if (fabs(lorisTimeCorr) < hopSamples && fabs(lorisFreqCorr) < 2.)
-      {
-        double dp = spectrum.phaseAt(k) - lorisSpectrum.reassignedPhase(k);
-        dp = fabs(remainder(dp, 2. * kPi));
-        b.maxPhaseErr = std::max(b.maxPhaseErr, dp);
-      }
-    }
-  }
-
-  printf("%ld frames, %ld bins >-90dB compared\n", frames, binsCompared);
-  printf("%-11s %10s %10s %10s %10s %9s\n", "bucket", "magRel", "freqCorr", "timeCorr",
-         "phase", "bins");
-  for (const Bucket& b : buckets)
-  {
-    printf("%-11s %10.3g %10.3g %10.3g %10.3g %9ld\n", b.name, b.maxMagRelErr,
-           b.maxFreqCorrErr, b.maxTimeCorrErr, b.maxPhaseErr, b.bins);
-  }
-
-  // gate on the well-conditioned bins; the analyzer only forms breakpoints
-  // at spectral peaks, and floor-bin corrections only affect which
-  // candidates get amplitude-rejected
-  const Bucket& top = buckets[0];
-  const bool pass = (top.maxMagRelErr < 1e-4) && (top.maxFreqCorrErr < 1e-3) &&
-                    (top.maxTimeCorrErr < 1e-2) && (top.maxPhaseErr < 1e-2);
-  printf("spectrum-test: %s\n", pass ? "PASS" : "FAIL");
-  return pass ? 0 : 1;
-}
-
-// ---------------------------------------------------------------------------
-// peaks-test: peak selection + thinning vs Loris (M4)
-
-// literal copy of Loris Analyzer::thinPeaks (private there), on Loris peaks
-Loris::Peaks::iterator lorisThinPeaks(Loris::Peaks& peaks, double frameTime, double ampFloordB,
-                                      double freqResolution)
-{
-  const double fadeRangedB = 10.0;
-  const double threshold = std::pow(10., 0.05 * ampFloordB);
-  const double beginFade = std::pow(10., 0.05 * (ampFloordB + fadeRangedB));
-
-  std::sort(peaks.begin(), peaks.end(), Loris::SpectralPeak::sort_greater_amplitude);
-
-  peaks.erase(std::remove_if(peaks.begin(), peaks.end(),
-                             [frameTime](const Loris::SpectralPeak& v)
-                             { return 0 > (v.time() + frameTime); }),
-              peaks.end());
-
-  auto it = peaks.begin();
-  auto beginRejected = it;
-  while (it != peaks.end())
-  {
-    Loris::SpectralPeak& pk = *it;
-    const double lower = pk.frequency() - freqResolution;
-    const double upper = pk.frequency() + freqResolution;
-    const bool masked =
-        beginRejected != std::find_if(peaks.begin(), beginRejected,
-                                      [lower, upper](const Loris::SpectralPeak& v) {
-                                        return (v.frequency() > lower) &&
-                                               (v.frequency() < upper);
-                                      });
-    if (pk.amplitude() > threshold && !masked)
-    {
-      if (pk.amplitude() < beginFade)
-      {
-        double alpha = (beginFade - pk.amplitude()) / (beginFade - threshold);
-        pk.setAmplitude(pk.amplitude() * (1. - alpha));
-      }
-      if (it != beginRejected)
-      {
-        std::swap(*it, *beginRejected);
-      }
-      ++beginRejected;
-    }
-    ++it;
-  }
-  return beginRejected;
-}
-
-// with withBandwidth, both engines also run residue bandwidth association
-// (M5) and matched-peak bw/adjusted-amp errors are gated
-int peaksTest(const char* path, bool withBandwidth)
-{
-  std::vector<float> samplesF;
-  double sr = 0.;
-  if (!loadAudio(path, samplesF, sr)) return 2;
-  std::vector<double> samplesD(samplesF.begin(), samplesF.end());
-  const long nSamples = long(samplesD.size());
-
-  const double resolutionHz = 80.;
-  const double widthHz = 160.;
-  const double sidelobeDb = 90.;
-  const double ampFloorDb = -90.;
-  const double freqFloorHz = resolutionHz;  // Loris default: freqFloor = resolution
-
-  const double shape = Loris::KaiserWindow::computeShape(sidelobeDb);
-  long winlen = long(Loris::KaiserWindow::computeLength(widthHz / sr, shape));
-  if (!(winlen % 2)) ++winlen;
-  std::vector<double> win(winlen), winDeriv(winlen);
-  Loris::KaiserWindow::buildWindow(win, shape);
-  Loris::KaiserWindow::buildTimeDerivativeWindow(winDeriv, shape);
-  Loris::ReassignedSpectrum lorisSpectrum(win, winDeriv);
-
-  const double hopTime = 1. / widthHz;
-  const double cropTime = hopTime;
-  const double bwRegionWidthHz = 2000.;
-  Loris::SpectralPeakSelector lorisSelector(sr, cropTime);
-  Loris::AssociateBandwidth lorisBw(bwRegionWidthHz, sr);
-
-  ml::utu::ReassignedSpectrum spectrum;
-  spectrum.configure(ml::utu::buildReassignmentWindows(sr, widthHz, sidelobeDb));
-  ml::utu::PeakSelector selector;
-  selector.configure(float(sr), float(cropTime));
-  ml::utu::AssociateBandwidth bwAssociator;
-  bwAssociator.configure(float(bwRegionWidthHz), float(sr));
-
-  const long hopSamples = long(hopTime * sr);
-  const long half = winlen / 2;
-  const double* bufBegin = samplesD.data();
-  const double* bufEnd = bufBegin + nSamples;
-
-  long frames = 0;
-  long lorisKeptTotal = 0, keptTotal = 0, matchedTotal = 0;
-  long lorisRejTotal = 0, rejTotal = 0;
-  double maxFreqErr = 0., maxAmpRelErr = 0., maxPhaseErr = 0., maxTimeErr = 0., maxBwErr = 0.;
-  // a single borderline peak landing on the other side of the kept/rejected
-  // partition shifts the residue energy of its whole region, so bw agreement
-  // is only meaningful on frames where both engines partition identically
-  long partitionDiffFrames = 0;
-  double maxBwErrSamePartition = 0.;
-  ml::utu::PeakFrame frame;
-
-  for (long center = 0; center < nSamples; center += hopSamples, ++frames)
-  {
-    const double frameTime = double(center) / sr;
-
-    const double* winMiddle = bufBegin + center;
-    lorisSpectrum.transform(std::max(winMiddle - half, bufBegin), winMiddle,
-                            std::min(winMiddle + half + 1, bufEnd));
-    Loris::Peaks lorisPeaks = lorisSelector.selectPeaks(lorisSpectrum, freqFloorHz);
-    auto lorisRejected = lorisThinPeaks(lorisPeaks, frameTime, ampFloorDb, resolutionHz);
-    const long lorisKept = long(lorisRejected - lorisPeaks.begin());
-
-    spectrum.transform(samplesF.data(), nSamples, center);
-    selector.selectPeaks(spectrum, float(freqFloorHz), frame);
-    ml::utu::thinPeaks(frame, float(resolutionHz), float(ampFloorDb), frameTime);
-
-    if (withBandwidth)
-    {
-      lorisBw.associateBandwidth(lorisPeaks.begin(), lorisRejected, lorisPeaks.end());
-      bwAssociator.associateBandwidth(frame);
-    }
-
-    lorisKeptTotal += lorisKept;
-    keptTotal += long(frame.numKept);
-    lorisRejTotal += long(lorisPeaks.size()) - lorisKept;
-    rejTotal += long(frame.peaks.size() - frame.numKept);
-
-    // match kept sets by frequency, greedy two-pointer over freq-sorted lists
-    std::vector<const Loris::SpectralPeak*> lk;
-    for (long i = 0; i < lorisKept; ++i) lk.push_back(&lorisPeaks[i]);
-    std::sort(lk.begin(), lk.end(),
-              [](auto* a, auto* b) { return a->frequency() < b->frequency(); });
-    std::vector<const ml::utu::Peak*> mk;
-    for (size_t i = 0; i < frame.numKept; ++i) mk.push_back(&frame.peaks[i]);
-    std::sort(mk.begin(), mk.end(), [](auto* a, auto* b) { return a->freq < b->freq; });
-
-    const double matchTolHz = 0.5;
-    size_t a = 0, b = 0;
-    long matchedThisFrame = 0;
-    double frameBwErr = 0.;
-    while (a < lk.size() && b < mk.size())
-    {
-      const double fa = lk[a]->frequency();
-      const double fb = mk[b]->freq;
-      if (fabs(fa - fb) < matchTolHz)
-      {
-        ++matchedThisFrame;
-        maxFreqErr = std::max(maxFreqErr, fabs(fa - fb));
-        maxAmpRelErr = std::max(
-            maxAmpRelErr, fabs(mk[b]->amp - lk[a]->amplitude()) / lk[a]->amplitude());
-        maxTimeErr = std::max(maxTimeErr, fabs(mk[b]->timeOffset - lk[a]->time()));
-        double dp = remainder(mk[b]->phase - lk[a]->createBreakpoint().phase(), 2. * kPi);
-        maxPhaseErr = std::max(maxPhaseErr, fabs(dp));
-        frameBwErr = std::max(frameBwErr, fabs(mk[b]->bw - lk[a]->bandwidth()));
-        ++a;
-        ++b;
-      }
-      else if (fa < fb)
-        ++a;
-      else
-        ++b;
-    }
-    matchedTotal += matchedThisFrame;
-    maxBwErr = std::max(maxBwErr, frameBwErr);
-    const bool samePartition = (long(frame.numKept) == lorisKept) &&
-                               (frame.peaks.size() == lorisPeaks.size()) &&
-                               (matchedThisFrame == lorisKept);
-    if (samePartition)
-    {
-      maxBwErrSamePartition = std::max(maxBwErrSamePartition, frameBwErr);
+      printf("  resolved: %zu significant (%zu simultaneous), want 2\n", sig.size(), simul);
+      ok = false;
     }
     else
     {
-      ++partitionDiffFrames;
-    }
-  }
-
-  const double keptDrift =
-      fabs(double(keptTotal - lorisKeptTotal)) / std::max(1L, lorisKeptTotal);
-  const double unmatched = 1. - double(matchedTotal) / std::max(1L, lorisKeptTotal);
-  printf("%ld frames\n", frames);
-  printf("  kept peaks:     %ld loris, %ld new (drift %.3g%%)\n", lorisKeptTotal, keptTotal,
-         100. * keptDrift);
-  printf("  rejected peaks: %ld loris, %ld new\n", lorisRejTotal, rejTotal);
-  printf("  matched: %ld (unmatched %.3g%%)\n", matchedTotal, 100. * unmatched);
-  printf("  max matched err: freq %.3g Hz, amp rel %.3g, time %.3g s, phase %.3g rad\n",
-         maxFreqErr, maxAmpRelErr, maxTimeErr, maxPhaseErr);
-  if (withBandwidth)
-  {
-    printf("  max matched bw err: %.3g overall; %.3g on the %ld/%ld frames with identical"
-           " partitions\n",
-           maxBwErr, maxBwErrSamePartition, frames - partitionDiffFrames, frames);
-  }
-
-  bool pass = (keptDrift < 0.02) && (unmatched < 0.02);
-  if (withBandwidth)
-  {
-    // the meaningful agreement check is bw on identically-partitioned
-    // frames; the fraction of frames with any partition difference grew
-    // when file rates were read correctly (44.1k frames hold many more
-    // near-floor borderline candidates than the old 11 kHz misread), so
-    // that gate is loose
-    pass = pass && (maxBwErrSamePartition < 0.02) &&
-           (double(partitionDiffFrames) / frames < 0.15);
-  }
-  printf("%s: %s\n", withBandwidth ? "bandwidth-test" : "peaks-test", pass ? "PASS" : "FAIL");
-  return pass ? 0 : 1;
-}
-
-// ---------------------------------------------------------------------------
-// analyze-test: full analysis pipeline vs Loris::Analyzer (M6 + M7)
-
-struct TrackInfo
-{
-  double t0{0}, t1{0};  // start/end time in seconds
-  double f0{0};         // frequency at start
-  double energy{0};     // sum of amp²·dt over segments
-  long nbp{0};
-  int index{-1};
-  bool matched{false};
-};
-
-// linear interpolation into a VutuPartial at time t (within its range)
-void utuPartialAt(const ml::VutuPartial& p, double t, double& freq, double& amp)
-{
-  size_t i1 = 0, i2 = 1;
-  for (size_t i = 1; i < p.time.size(); ++i)
-  {
-    if (t < p.time[i])
-    {
-      i1 = i - 1;
-      i2 = i;
-      break;
-    }
-    i1 = i - 1;
-    i2 = i;
-  }
-  const double t1 = p.time[i1], t2 = p.time[i2];
-  const double frac = (t2 > t1) ? (t - t1) / (t2 - t1) : 0.;
-  freq = p.freq[i1] + frac * (p.freq[i2] - p.freq[i1]);
-  amp = p.amp[i1] + frac * (p.amp[i2] - p.amp[i1]);
-}
-
-int analyzeTest(const char* path)
-{
-  std::vector<float> samplesF;
-  double sr = 0.;
-  if (!loadAudio(path, samplesF, sr)) return 2;
-  std::vector<double> samplesD(samplesF.begin(), samplesF.end());
-  const long nSamples = long(samplesD.size());
-  printf("%s: %ld samples at %g Hz\n", path, nSamples, sr);
-
-  const double resolutionHz = 80.;
-  const double widthHz = 160.;
-
-  // Loris reference: full analyzer, all defaults from (res, width)
-  Loris::Analyzer lorisAnalyzer(resolutionHz, widthHz);
-  Loris::PartialList lorisPartials =
-      lorisAnalyzer.analyze(samplesD.data(), samplesD.data() + nSamples, sr);
-
-  ml::utu::AnalyzerParams params;
-  params.sampleRate = float(sr);
-  params.resolution = float(resolutionHz);
-  params.windowWidth = float(widthHz);
-  auto result = ml::utu::analyzeToPartials(samplesF.data(), nSamples, params);
-
-  // collect track info from both engines
-  std::vector<TrackInfo> lt, mt;
-  {
-    int idx = 0;
-    for (const Loris::Partial& p : lorisPartials)
-    {
-      TrackInfo t;
-      t.t0 = p.startTime();
-      t.t1 = p.endTime();
-      t.f0 = p.first().frequency();
-      t.nbp = long(p.numBreakpoints());
-      auto it = p.begin();
-      double prevT = it.time(), prevA = it.breakpoint().amplitude();
-      for (++it; it != p.end(); ++it)
+      double f[2];
+      for (int j = 0; j < 2; ++j)
       {
-        const double dt = it.time() - prevT;
-        const double a = it.breakpoint().amplitude();
-        t.energy += 0.5 * (a * a + prevA * prevA) * dt;
-        prevT = it.time();
-        prevA = a;
-      }
-      t.index = idx++;
-      lt.push_back(t);
-    }
-    idx = 0;
-    for (const ml::VutuPartial& p : result->partials)
-    {
-      TrackInfo t;
-      t.t0 = p.time.front();
-      t.t1 = p.time.back();
-      t.f0 = p.freq.front();
-      t.nbp = long(p.time.size());
-      for (size_t i = 1; i < p.time.size(); ++i)
-      {
-        const double dt = double(p.time[i]) - p.time[i - 1];
-        t.energy += 0.5 * (double(p.amp[i]) * p.amp[i] + double(p.amp[i - 1]) * p.amp[i - 1]) * dt;
-      }
-      t.index = idx++;
-      mt.push_back(t);
-    }
-  }
-
-  // greedy matching: tracks born from the same peak stream have nearly
-  // identical start time and start frequency
-  auto byStart = [](const TrackInfo& a, const TrackInfo& b)
-  { return (a.t0 != b.t0) ? (a.t0 < b.t0) : (a.f0 < b.f0); };
-  std::sort(lt.begin(), lt.end(), byStart);
-  std::sort(mt.begin(), mt.end(), byStart);
-
-  const double hopTime = 1. / widthHz;
-  const double startTimeTol = 1.5 * hopTime;
-  const double startFreqTol = std::max(1., resolutionHz / 4.);
-
-  double lorisEnergyTotal = 0., matchedEnergy = 0.;
-  long matched = 0;
-  double freqCentsSumSq = 0., ampRelSumSq = 0.;
-  long comparePoints = 0;
-  size_t searchBegin = 0;
-  for (auto& L : lt)
-  {
-    lorisEnergyTotal += L.energy;
-    while ((searchBegin < mt.size()) && (mt[searchBegin].t0 < L.t0 - startTimeTol))
-    {
-      ++searchBegin;
-    }
-    int best = -1;
-    double bestDf = startFreqTol;
-    for (size_t j = searchBegin; (j < mt.size()) && (mt[j].t0 <= L.t0 + startTimeTol); ++j)
-    {
-      if (mt[j].matched) continue;
-      const double df = fabs(mt[j].f0 - L.f0);
-      if (df < bestDf)
-      {
-        bestDf = df;
-        best = int(j);
-      }
-    }
-    if (best < 0) continue;
-
-    TrackInfo& M = mt[best];
-    M.matched = true;
-    L.matched = true;
-    ++matched;
-    matchedEnergy += L.energy;
-
-    // sample freq/amp over the overlap
-    const double o0 = std::max(L.t0, M.t0), o1 = std::min(L.t1, M.t1);
-    if (o1 <= o0) continue;
-    const Loris::Partial* lp = nullptr;
-    {  // recover the loris partial by index
-      long k = 0;
-      for (const Loris::Partial& p : lorisPartials)
-      {
-        if (k++ == L.index)
+        const auto& P = pd->partials[sig[j]];
+        double sum = 0.;
+        long n = 0;
+        for (size_t i = 0; i < P.time.size(); ++i)
         {
-          lp = &p;
-          break;
+          if (P.time[i] < 0.3 || P.time[i] > 1.7) continue;
+          sum += P.freq[i];
+          ++n;
         }
+        f[j] = n ? sum / n : 0.;
       }
-    }
-    const ml::VutuPartial& mp = result->partials[M.index];
-    const int kPoints = 9;
-    for (int k = 1; k < kPoints - 1; ++k)
-    {
-      const double t = o0 + (o1 - o0) * k / (kPoints - 1);
-      double mf, ma;
-      utuPartialAt(mp, t, mf, ma);
-      const double lf = lp->frequencyAt(t);
-      const double la = lp->amplitudeAt(t);
-      if ((lf > 0.) && (mf > 0.))
-      {
-        const double cents = 1200. * log2(mf / lf);
-        freqCentsSumSq += cents * cents;
-        ++comparePoints;
-        if (la > 1e-7)
-        {
-          const double rel = (ma - la) / la;
-          ampRelSumSq += rel * rel;
-        }
-      }
+      if (f[0] > f[1]) std::swap(f[0], f[1]);
+      printf("  resolved: %.3f and %.3f Hz (true 440, %g)\n", f[0], f[1], 440. + 1.5 * W);
+      ok &= fabs(f[0] - 440.) < tol::kTwoSineFreqHz;
+      ok &= fabs(f[1] - (440. + 1.5 * W)) < tol::kTwoSineFreqHz;
     }
   }
 
-  const double countDrift =
-      fabs(double(long(mt.size()) - long(lt.size()))) / std::max(size_t(1), lt.size());
-  const double energyFrac = matchedEnergy / std::max(1e-12, lorisEnergyTotal);
-  const double freqRmsCents = sqrt(freqCentsSumSq / std::max(1L, comparePoints));
-  const double ampRms = sqrt(ampRelSumSq / std::max(1L, comparePoints));
-
-  printf("  partials: %zu loris, %zu new (drift %.3g%%)\n", lt.size(), mt.size(),
-         100. * countDrift);
-  printf("  matched tracks: %ld (%.4g%% of loris energy)\n", matched, 100. * energyFrac);
-  printf("  freq RMS %.3g cents, amp env RMS rel %.3g (%ld points)\n", freqRmsCents, ampRms,
-         comparePoints);
-
-  const bool pass = (countDrift < 0.05) && (energyFrac > 0.95) && (freqRmsCents < 10.);
-  printf("analyze-test: %s\n", pass ? "PASS" : "FAIL");
-  return pass ? 0 : 1;
-}
-
-// ---------------------------------------------------------------------------
-// synth-test: bandwidth-enhanced rendering vs Loris::Synthesizer (M8)
-
-// vutu partials -> Loris PartialList, as vutu's old _sumuToLorisPartials
-Loris::PartialList vutuToLorisPartials(const ml::VutuPartialsData& d)
-{
-  Loris::PartialList list;
-  for (const ml::VutuPartial& sp : d.partials)
+  // merged: spacing 0.25·W — one beating component, never two simultaneous
+  // (the merged fate of a sub-resolution pair; the beat is an amplitude
+  // envelope on a single track)
   {
-    Loris::Partial lp;
-    for (size_t i = 0; i < sp.time.size(); ++i)
-    {
-      Loris::Breakpoint b(sp.freq[i], sp.amp[i], sp.bandwidth[i], sp.phase[i]);
-      lp.insert(sp.time[i], b);
-    }
-    list.push_back(lp);
+    auto x = makeSine(440., 0.3f, 2.0, sr);
+    auto y = makeSine(440. + 0.25 * W, 0.15f, 2.0, sr);
+    for (size_t i = 0; i < x.size(); ++i) x[i] += y[i];
+    auto pd = analyzeSimple(x, sr, float(W));
+    const auto sig = significantPartials(*pd);
+    const size_t simul = maxSimultaneousSignificant(*pd, sig, 2. * hopSec);
+    printf("  merged: %zu partials, %zu significant, %zu simultaneous\n",
+           pd->partials.size(), sig.size(), simul);
+    ok &= (simul == 1);
   }
-  return list;
+  return ok;
 }
 
-double rmsOf(const float* x, long n)
+bool testSilence()
 {
-  double s = 0.;
-  for (long i = 0; i < n; ++i) s += double(x[i]) * x[i];
-  return sqrt(s / std::max(1L, n));
-}
-double rmsOfD(const double* x, long n)
-{
-  double s = 0.;
-  for (long i = 0; i < n; ++i) s += x[i] * x[i];
-  return sqrt(s / std::max(1L, n));
-}
-
-// one constant partial, breakpoints every 10 ms
-ml::VutuPartialsData makeTestPartial(double freq, double amp, double bw, double dur)
-{
-  ml::VutuPartialsData d;
-  ml::VutuPartial p;
-  for (double t = 0.; t <= dur; t += 0.01)
+  const double sr = 44100.;
+  bool ok = true;
   {
-    p.time.push_back(float(t));
-    p.freq.push_back(float(freq));
-    p.amp.push_back(float(amp));
-    p.bandwidth.push_back(float(bw));
-    p.phase.push_back(0.f);
+    std::vector<float> x(size_t(sr), 0.f);
+    auto pd = analyzeSimple(x, sr, 160.f);
+    printf("  zeros: %zu partials\n", pd->partials.size());
+    ok &= pd->partials.empty();
   }
-  d.partials.push_back(p);
-  return d;
+  {
+    std::vector<float> x(size_t(sr), 0.25f);  // DC sits below freqFloor
+    auto pd = analyzeSimple(x, sr, 160.f);
+    printf("  DC: %zu partials\n", pd->partials.size());
+    ok &= pd->partials.empty();
+  }
+  return ok;
 }
 
-void renderBoth(const ml::VutuPartialsData& d, double sr, double fade,
-                std::vector<double>& lorisOut, std::vector<float>& newOut)
+bool testNoiseBw()
 {
-  Loris::PartialList lp = vutuToLorisPartials(d);
-  lorisOut.clear();
-  Loris::Synthesizer lorisSynth(sr, lorisOut, fade);
-  for (const Loris::Partial& p : lp) lorisSynth.synthesize(p);
+  const double sr = 44100.;
+  std::mt19937 gen(11);
+  std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+  std::vector<float> x(size_t(2. * sr));
+  for (auto& v : x) v = dist(gen);
+  auto pd = analyzeSimple(x, sr, 160.f);
+  if (pd->partials.empty())
+  {
+    printf("  no partials\n");
+    return false;
+  }
+  double num = 0., den = 0.;
+  for (const auto& P : pd->partials)
+    for (size_t i = 0; i < P.amp.size(); ++i)
+    {
+      const double e = double(P.amp[i]) * P.amp[i];
+      num += e * P.bandwidth[i];
+      den += e;
+    }
+  const double meanBw = den > 0. ? num / den : 0.;
+
+  // energy conservation through the whole model: noise in, noise out
+  ml::utu::SynthParams sp;
+  sp.sampleRate = float(sr);
+  sp.fadeTime = 0.001f;
+  ml::utu::PartialSynthesizer synth;
+  synth.setParams(sp);
+  std::vector<float> out;
+  synth.render(*pd, out);
+  const size_t n = std::min(x.size(), out.size());
+  double srcE = 0., outE = 0.;
+  for (size_t i = size_t(0.2 * sr); i < n; ++i)
+  {
+    srcE += double(x[i]) * x[i];
+    outE += double(out[i]) * out[i];
+  }
+  const double rmsDevDb = 10. * log10(std::max(1e-12, outE / std::max(1e-12, srcE)));
+  printf("  %zu partials, energy-weighted mean bw %.3f, render RMS dev %+.2f dB\n",
+         pd->partials.size(), meanBw, rmsDevDb);
+  return (meanBw > tol::kNoiseMeanBw) && (fabs(rmsDevDb) < tol::kNoiseRmsDevDb);
+}
+
+bool testResidueGate()
+{
+  // gate semantics: with the residue time gate at g, association must equal
+  // an ungated association run on only the residue peaks within ±g. Also
+  // checks the energy-preserving update: bw·amp'² recovers the collected
+  // noise energy exactly, and amp only grows.
+  const float sr = 44100.f;
+  const float regionWidth = 500.f;
+  const float hopSec = 1.f / 160.f;
+  const float gate = 0.5f * hopSec;
+
+  auto makeFrame = [](std::initializer_list<ml::utu::Peak> residue)
+  {
+    ml::utu::PeakFrame f;
+    ml::utu::Peak kept;
+    kept.freq = 3000.f;
+    kept.amp = 0.3f;
+    f.peaks.push_back(kept);
+    for (const auto& r : residue) f.peaks.push_back(r);
+    f.numKept = 1;
+    return f;
+  };
+  auto peak = [](float freq, float amp, float off)
+  {
+    ml::utu::Peak p;
+    p.freq = freq;
+    p.amp = amp;
+    p.timeOffset = off;
+    return p;
+  };
+  const ml::utu::Peak inside[] = {peak(3050.f, 0.10f, 0.f), peak(3120.f, 0.12f, 0.2f * hopSec),
+                                  peak(3200.f, 0.08f, -0.45f * hopSec)};
+  const ml::utu::Peak outside[] = {peak(3260.f, 0.20f, 0.8f * hopSec),
+                                   peak(2950.f, 0.15f, -0.7f * hopSec)};
+
+  auto associate = [&](ml::utu::PeakFrame frame, float gateSec)
+  {
+    ml::utu::AssociateBandwidth bw;
+    bw.configure(regionWidth, sr, gateSec);
+    bw.associateBandwidth(frame);
+    const auto& k = frame.peaks[0];
+    return double(k.bw) * k.amp * k.amp;  // collected noise energy
+  };
+
+  const double eAll = associate(makeFrame({inside[0], inside[1], inside[2], outside[0], outside[1]}), 0.f);
+  const double eInside = associate(makeFrame({inside[0], inside[1], inside[2]}), 0.f);
+  const double eOutside = associate(makeFrame({outside[0], outside[1]}), 0.f);
+  const double eGated = associate(makeFrame({inside[0], inside[1], inside[2], outside[0], outside[1]}), gate);
+
+  // amp growth check on one association
+  auto frame = makeFrame({inside[0], inside[1], inside[2]});
+  ml::utu::AssociateBandwidth bw;
+  bw.configure(regionWidth, sr, 0.f);
+  bw.associateBandwidth(frame);
+  const bool ampGrew = frame.peaks[0].amp >= 0.3f;
+  const bool bwInRange = frame.peaks[0].bw >= 0.f && frame.peaks[0].bw <= 1.f;
+
+  const double additivity = fabs(eAll - (eInside + eOutside)) / std::max(1e-12, eAll);
+  const double gateIdentity = fabs(eGated - eInside) / std::max(1e-12, eInside);
+  printf("  enoise all %.3e = in %.3e + out %.3e (dev %.1e); gated %.3e (dev %.1e)\n", eAll,
+         eInside, eOutside, additivity, eGated, gateIdentity);
+  printf("  kept amp %.4f (grew %d), bw %.3f\n", frame.peaks[0].amp, int(ampGrew),
+         frame.peaks[0].bw);
+  return (eInside > 0.) && (additivity < tol::kResidueGateRel) &&
+         (gateIdentity < tol::kResidueGateRel) && ampGrew && bwInRange;
+}
+
+bool testPhaseFix()
+{
+  const double sr = 44100.;
+  const long hop = 275;
+  const double f0 = 440.;
+  std::mt19937 gen(3);
+  std::uniform_real_distribution<float> jitter(-0.5f, 0.5f);
+
+  ml::utu::BuildingPartial p;
+  std::vector<float> origFreq;
+  for (int i = 0; i < 40; ++i)
+  {
+    const double t = double(i) * hop / sr;
+    p.frameSample.push_back(int64_t(i) * hop);
+    p.timeOffset.push_back(0.f);
+    const float f = float(f0) + jitter(gen);
+    p.freq.push_back(f);
+    origFreq.push_back(f);
+    p.amp.push_back(0.3f);
+    p.bw.push_back(0.f);
+    p.phase.push_back(float(ml::utu::wrapPi(kTwoPi * f0 * t)));
+  }
+  ml::utu::fixFrequency(p, sr);
+
+  double maxPhaseErr = 0., maxFixPct = 0.;
+  for (size_t i = 1; i < p.size(); ++i)
+  {
+    const double dt = p.dt(i - 1, i, sr);
+    const double travel = kPi * (double(p.freq[i - 1]) + p.freq[i]) * dt;
+    maxPhaseErr = std::max(
+        maxPhaseErr, fabs(ml::utu::wrapPi(double(p.phase[i]) - p.phase[i - 1] - travel)));
+  }
+  for (size_t i = 0; i < p.size(); ++i)
+  {
+    maxFixPct = std::max(maxFixPct, 100. * fabs(double(p.freq[i]) / origFreq[i] - 1.));
+  }
+  printf("  phase-travel err %.5f rad, max freq fix %.4f%% (clamp %.1f%%)\n", maxPhaseErr,
+         maxFixPct, tol::kMaxFixPct);
+  return (maxPhaseErr < tol::kPhaseFixRad) && (maxFixPct <= tol::kMaxFixPct + 1e-3);
+}
+
+bool testSynthNull()
+{
+  const double sr = 44100.;
+  const double f0 = 440.;
+  const float A = 0.3f;
+  ml::VutuPartialsData pd;
+  pd.partials.resize(1);
+  auto& P = pd.partials[0];
+  for (int i = 0; i <= 100; ++i)
+  {
+    const double t = i * 0.01;
+    P.time.push_back(float(t));
+    P.amp.push_back(A);
+    P.freq.push_back(float(f0));
+    P.bandwidth.push_back(0.f);
+    P.phase.push_back(float(ml::utu::wrapPi(kTwoPi * f0 * t)));
+  }
+  ml::calcStats(pd);
 
   ml::utu::SynthParams sp;
   sp.sampleRate = float(sr);
-  sp.fadeTime = float(fade);
+  sp.fadeTime = 0.001f;
   ml::utu::PartialSynthesizer synth;
   synth.setParams(sp);
-  synth.render(d, newOut);
+  std::vector<float> out;
+  synth.render(pd, out);
+  if (out.size() < size_t(sr))
+  {
+    printf("  render too short: %zu samples\n", out.size());
+    return false;
+  }
+  double amp, phase, residRms, sigRms;
+  fitSinusoid(out, size_t(0.1 * sr), size_t(0.9 * sr), f0, sr, amp, phase, residRms, sigRms);
+  const double nullDb = 20. * log10(std::max(1e-12, residRms / sigRms));
+  const double ampDevDb = fabs(20. * log10(amp / A));
+  // fitted phase vs the stored breakpoint phase measures the synth's phase
+  // reference relative to sin(2π f t); must agree with the analyzer's
+  const double phaseRef = ml::utu::wrapPi(phase);
+  printf("  null %.1f dB, amp dev %.3f dB, render phase ref %.4f rad\n", nullDb, ampDevDb,
+         phaseRef);
+  bool ok = (nullDb < tol::kSynthNullDb) && (ampDevDb < tol::kSynthAmpDb);
+  if (kPhaseOffsetPinned) ok &= fabs(ml::utu::wrapPi(phaseRef - kSynthPhaseRef)) < 0.1;
+  return ok;
 }
 
-int synthTest(const char* path)
+bool testRoundtrip()
 {
-  const double sr = 48000.;
-  const double fade = 0.001;
-  std::vector<double> lorisOut;
-  std::vector<float> newOut;
-
-  // pure sine (bw 0): engines should nearly null
+  const double sr = 44100.;
+  const double f0 = 440.1;
+  auto x = makeSine(f0, 0.5f, 5.0, sr);
+  auto pd = analyzeSimple(x, sr, 160.f);
+  if (pd->partials.empty())
   {
-    auto d = makeTestPartial(440., 0.5, 0., 2.);
-    renderBoth(d, sr, fade, lorisOut, newOut);
-    const long n = std::min(lorisOut.size(), newOut.size());
-    double maxDiff = 0.;
-    for (long i = 0; i < n; ++i)
-    {
-      maxDiff = std::max(maxDiff, fabs(lorisOut[i] - newOut[i]));
-    }
-    printf("sine bw=0:  loris RMS %.4f, new RMS %.4f, max sample diff %.3g\n",
-           rmsOfD(lorisOut.data(), n), rmsOf(newOut.data(), n), maxDiff);
-    if (maxDiff > 1e-3)
-    {
-      printf("synth-test: FAIL (sine mismatch)\n");
-      return 1;
-    }
+    printf("  no partials\n");
+    return false;
   }
-
-  // full-bandwidth noise: RMS should match after modulator calibration
-  double noiseRatio;
+  ml::utu::SynthParams sp;
+  sp.sampleRate = float(sr);
+  sp.fadeTime = 0.001f;
+  ml::utu::PartialSynthesizer synth;
+  synth.setParams(sp);
+  std::vector<float> out;
+  synth.render(*pd, out);
+  const size_t n = std::min(x.size(), out.size());
+  if (!n)
   {
-    auto d = makeTestPartial(440., 0.5, 1., 2.);
-    renderBoth(d, sr, fade, lorisOut, newOut);
-    const long n = std::min(lorisOut.size(), newOut.size());
-    const long skip = n / 4;  // measure the steady middle
-    const double lr = rmsOfD(lorisOut.data() + skip, n / 2);
-    const double nr = rmsOf(newOut.data() + skip, n / 2);
-    noiseRatio = lr / std::max(1e-12, nr);
-    printf("noise bw=1: loris RMS %.4f, new RMS %.4f (gain ratio %.4f)\n", lr, nr, noiseRatio);
+    printf("  empty render\n");
+    return false;
   }
+  auto s = ml::utu::scoreReconstruction(x.data(), x.size(), out.data(), out.size(), sr);
 
-  // half bandwidth sanity
+  // time-domain null over the steady middle: phase-correct rendering should
+  // reproduce the waveform itself, not just its spectrum
+  double resid = 0., sig = 0.;
+  for (size_t i = size_t(0.5 * sr); i < std::min(n, size_t(4.5 * sr)); ++i)
   {
-    auto d = makeTestPartial(440., 0.5, 0.5, 2.);
-    renderBoth(d, sr, fade, lorisOut, newOut);
-    const long n = std::min(lorisOut.size(), newOut.size());
-    const long skip = n / 4;
-    printf("mixed bw=.5: loris RMS %.4f, new RMS %.4f\n", rmsOfD(lorisOut.data() + skip, n / 2),
-           rmsOf(newOut.data() + skip, n / 2));
+    const double d = double(out[i]) - x[i];
+    resid += d * d;
+    sig += double(x[i]) * x[i];
   }
+  const double nullDb = 20. * log10(std::max(1e-12, sqrt(resid / std::max(1., sig))));
+  // watery is printed but not asserted: see the tolerance table note
+  printf("  spectral %.2f dB, watery %.2f dB, rustle %.2f dB, null %.1f dB\n", s.spectralRmsDb,
+         s.wateryDb, s.rustleDb, nullDb);
+  return (s.spectralRmsDb < tol::kRoundtripSpectral) && (s.rustleDb < tol::kRoundtripRustle) &&
+         (nullDb < tol::kRoundtripNullDb);
+}
 
-  // full render A/B from a real sound, if given: analyze with the new
-  // engine, render the same partials with both synths, compare coarse RMS
-  // envelopes and write aiffs for listening
-  if (path)
+struct SelfTestEntry
+{
+  const char* name;
+  bool (*fn)();
+};
+
+int selfTest(const char* filter)
+{
+  static const SelfTestEntry tests[] = {
+      {"window-shape", testWindowShape},
+      {"window-hd", testWindowHd},
+      {"impulse-time", testImpulseTime},
+      {"sine", testSine},
+      {"sine96", testSine96},
+      {"chirp", testChirp},
+      {"crop-burst", testCropBurst},
+      {"two-sine", testTwoSine},
+      {"silence", testSilence},
+      {"noise-bw", testNoiseBw},
+      {"residue-gate", testResidueGate},
+      {"phasefix", testPhaseFix},
+      {"synth-null", testSynthNull},
+      {"roundtrip", testRoundtrip},
+  };
+  int failures = 0, ran = 0;
+  for (const auto& t : tests)
   {
-    std::vector<float> samplesF;
-    double fsr = 0.;
-    if (!loadAudio(path, samplesF, fsr)) return 2;
-
-    ml::utu::AnalyzerParams params;
-    params.sampleRate = float(fsr);
-    params.resolution = 80.f;
-    params.windowWidth = 160.f;
-    auto partials = ml::utu::analyzeToPartials(samplesF.data(), samplesF.size(), params);
-
-    // (a) deterministic part: render with bandwidth zeroed; the engines
-    // should track each other tightly
-    {
-      ml::VutuPartialsData det = *partials;
-      for (auto& p : det.partials)
-      {
-        std::fill(p.bandwidth.begin(), p.bandwidth.end(), 0.f);
-      }
-      renderBoth(det, fsr, fade, lorisOut, newOut);
-      const long n = long(std::min(lorisOut.size(), newOut.size()));
-      const long win = long(0.05 * fsr);
-      double peak = 0.;
-      for (long i = 0; i < n; ++i) peak = std::max(peak, fabs(lorisOut[i]));
-      double maxEnvRel = 0., sumRel = 0.;
-      long envPoints = 0;
-      for (long i = 0; i + win <= n; i += win)
-      {
-        const double lr = rmsOfD(lorisOut.data() + i, win);
-        const double nr = rmsOf(newOut.data() + i, win);
-        if (lr > 1e-3 * peak)
-        {
-          const double rel = fabs(nr - lr) / lr;
-          maxEnvRel = std::max(maxEnvRel, rel);
-          sumRel += rel;
-          ++envPoints;
-        }
-      }
-      printf("%s bw=0: envelope rel diff mean %.3g max %.3g (%ld windows)\n", path,
-             sumRel / std::max(1L, envPoints), maxEnvRel, envPoints);
-      if ((maxEnvRel > 0.1) || (sumRel / std::max(1L, envPoints) > 0.01))
-      {
-        printf("synth-test: FAIL (deterministic render mismatch)\n");
-        return 1;
-      }
-    }
-
-    // (b) full render: different noise realizations, so gate loosely on
-    // global RMS and mean envelope difference; judge finally by listening
-    renderBoth(*partials, fsr, fade, lorisOut, newOut);
-    const long n = long(std::min(lorisOut.size(), newOut.size()));
-    const long win = long(0.05 * fsr);
-    double peak = 0.;
-    for (long i = 0; i < n; ++i) peak = std::max(peak, fabs(lorisOut[i]));
-    double maxEnvRel = 0., sumRel = 0.;
-    long envPoints = 0;
-    for (long i = 0; i + win <= n; i += win)
-    {
-      const double lr = rmsOfD(lorisOut.data() + i, win);
-      const double nr = rmsOf(newOut.data() + i, win);
-      if (lr > 1e-3 * peak)
-      {
-        const double rel = fabs(nr - lr) / lr;
-        maxEnvRel = std::max(maxEnvRel, rel);
-        sumRel += rel;
-        ++envPoints;
-      }
-    }
-    const double globalRel =
-        fabs(rmsOf(newOut.data(), n) - rmsOfD(lorisOut.data(), n)) / rmsOfD(lorisOut.data(), n);
-    printf("%s full: global RMS rel diff %.3g, envelope rel diff mean %.3g max %.3g\n", path,
-           globalRel, sumRel / std::max(1L, envPoints), maxEnvRel);
-
-    // write renders for listening
-    std::vector<float> lorisOutF(lorisOut.begin(), lorisOut.end());
-    const int fmt = SF_FORMAT_AIFF | SF_FORMAT_PCM_24;
-    writeAudio("utucompare-loris-render.aiff", lorisOutF.data(), lorisOutF.size(), fsr, fmt);
-    writeAudio("utucompare-new-render.aiff", newOut.data(), newOut.size(), fsr, fmt);
-    printf("wrote utucompare-loris-render.aiff, utucompare-new-render.aiff\n");
-
-    const bool pass = (globalRel < 0.05) && (sumRel / std::max(1L, envPoints)) < 0.15;
-    printf("synth-test: %s\n", pass ? "PASS" : "FAIL");
-    return pass ? 0 : 1;
+    if (filter && !strstr(t.name, filter)) continue;
+    printf("[%s]\n", t.name);
+    ++ran;
+    const bool ok = t.fn();
+    printf("  %s\n", ok ? "PASS" : "FAIL");
+    failures += !ok;
   }
-
-  printf("synth-test: PASS (calibration only)\n");
-  return 0;
+  if (!ran)
+  {
+    printf("no tests match '%s'\n", filter ? filter : "");
+    return 2;
+  }
+  printf("selftest: %d/%d passed\n", ran - failures, ran);
+  return failures ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -987,16 +953,7 @@ std::vector<float> makeTestSignal(const std::string& name, double sr)
 
   if (name == "@sine")
   {
-    // accumulate phase in double: sinf(2π·f·i) loses all precision once the
-    // argument grows past ~1e7
-    x.resize(size_t(5 * sr));
-    double phase = 0.;
-    const double inc = 2. * kPi * 440.1 / sr;
-    for (size_t i = 0; i < x.size(); ++i)
-    {
-      x[i] = 0.5f * float(sin(phase));
-      phase += inc;
-    }
+    x = makeSine(440.1, 0.5f, 5., sr);
   }
   else if (name == "@harm")
   {
@@ -1079,27 +1036,15 @@ int autoTest(const char* path)
 {
   double sr = kSyntheticRate;
   std::vector<float> samplesF;
-  auto fillSine = [](std::vector<float>& v, double freq, double rate)
-  {
-    double phase = 0.;
-    const double inc = 2. * kPi * freq / rate;
-    for (auto& s : v)
-    {
-      s = 0.5f * float(sin(phase));
-      phase += inc;
-    }
-  };
   if (std::string(path) == "@short")
   {
     // 0.3 s: exercises the short-file guards (Welch size, window floor)
-    samplesF.resize(size_t(0.3 * sr));
-    fillSine(samplesF, 330., sr);
+    samplesF = makeSine(330., 0.5f, 0.3, sr);
   }
   else if (std::string(path) == "@sine96")
   {
     sr = 96000.;
-    samplesF.resize(size_t(3 * sr));
-    fillSine(samplesF, 440., sr);
+    samplesF = makeSine(440., 0.5f, 3., sr);
   }
   else
   {
@@ -1363,8 +1308,20 @@ int tuneCmd(const char* path, int budget)
 
 // ---------------------------------------------------------------------------
 // convert-dir: batch analyze -> resynthesize every audio file in a directory,
-// writing <name>-converted.<ext> beside each source and auto-params.txt with
-// the automatically chosen analysis parameters per file
+// writing <name>-converted.<ext> and <name>.utu beside each source and
+// auto-params.txt with the automatically chosen analysis parameters per file
+
+bool writePartialsFile(const std::string& path, const ml::VutuPartialsData& partials)
+{
+  auto json = ml::vutuPartialsToJSON(partials);
+  auto text = ml::JSONToText(json);
+  FILE* f = fopen(path.c_str(), "w");
+  if (!f) return false;
+  const size_t n = text.lengthInBytes();
+  const bool ok = fwrite(text.getText(), 1, n, f) == n;
+  fclose(f);
+  return ok;
+}
 
 int convertDir(const char* dirPath, int budget)
 {
@@ -1446,6 +1403,21 @@ int convertDir(const char* dirPath, int budget)
     fprintf(report, "  analysis: %zu partials, max simultaneous %zu\n",
             partials->partials.size(), partials->stats.maxActivePartials);
 
+    // partials beside the render, for structural comparison across engines
+    partials->sourceFile = ml::TextFragment(name.c_str());
+    partials->sourceDuration = float(x.size() / sr);
+    partials->hiCut = r.hiCut;
+    partials->fundamental = r.fundamental;
+    const fs::path utuPath = path.parent_path() / (path.stem().string() + ".utu");
+    if (writePartialsFile(utuPath.string(), *partials))
+    {
+      fprintf(report, "  wrote %s\n", utuPath.filename().string().c_str());
+    }
+    else
+    {
+      fprintf(report, "  ERROR: could not write %s\n", utuPath.filename().string().c_str());
+    }
+
     ml::utu::SynthParams sp;
     sp.sampleRate = float(sr);
     sp.fadeTime = 0.001f;
@@ -1495,6 +1467,164 @@ int convertDir(const char* dirPath, int budget)
   return failures ? 1 : 0;
 }
 
+// ---------------------------------------------------------------------------
+// ab-dir: regression gate. Analyze + render every source in srcdir with the
+// current engine and score against the source; compare with the golden
+// renders (goldendir/<stem>-converted.<ext>) and golden partials
+// (goldendir/<stem>.utu) produced by a previous engine via convert-dir.
+// Acceptance: each score component within +0.5 dB of golden (better is
+// always fine), partial count within ±10% when golden partials exist, and
+// no file regressing more than 1.0 in total score.
+
+constexpr float kAbComponentSlack = 0.5f;
+constexpr float kAbTotalSlack = 1.0f;
+constexpr float kAbCountSlack = 0.10f;
+
+ml::VutuPartialsData* loadPartialsFile(const std::string& path)
+{
+  FILE* f = fopen(path.c_str(), "rb");
+  if (!f) return nullptr;
+  std::string text;
+  fseek(f, 0, SEEK_END);
+  text.resize(size_t(ftell(f)));
+  fseek(f, 0, SEEK_SET);
+  const size_t got = fread(text.data(), 1, text.size(), f);
+  fclose(f);
+  if (got != text.size()) return nullptr;
+  auto json = ml::textToJSON(ml::TextFragment(text.c_str()));
+  return ml::jsonToVutuPartials(json);
+}
+
+int abDir(const char* srcDirPath, const char* goldenDirPath, int budget)
+{
+  namespace fs = std::filesystem;
+  const fs::path srcDir(srcDirPath), goldenDir(goldenDirPath);
+  if (!fs::is_directory(srcDir) || !fs::is_directory(goldenDir))
+  {
+    printf("need two directories\n");
+    return 2;
+  }
+
+  std::vector<fs::path> files;
+  for (const auto& entry : fs::directory_iterator(srcDir))
+  {
+    if (!entry.is_regular_file()) continue;
+    std::string ext = entry.path().extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char ch) { return char(std::tolower(ch)); });
+    if ((ext != ".aif") && (ext != ".aiff") && (ext != ".wav")) continue;
+    const std::string stem = entry.path().stem().string();
+    auto endsWith = [&stem](const char* tag)
+    {
+      const size_t n = strlen(tag);
+      return (stem.size() >= n) && (stem.compare(stem.size() - n, n, tag) == 0);
+    };
+    if (endsWith("-converted") || endsWith("-tuned")) continue;
+    files.push_back(entry.path());
+  }
+  std::sort(files.begin(), files.end());
+  if (files.empty())
+  {
+    printf("no audio files in %s\n", srcDirPath);
+    return 2;
+  }
+
+  int failures = 0, skipped = 0;
+  for (const fs::path& path : files)
+  {
+    const std::string stem = path.stem().string();
+    const fs::path goldenRender = goldenDir / (stem + "-converted" + path.extension().string());
+    if (!fs::exists(goldenRender))
+    {
+      printf("%s: SKIP (no golden %s)\n", stem.c_str(),
+             goldenRender.filename().string().c_str());
+      ++skipped;
+      continue;
+    }
+
+    std::vector<float> src, golden;
+    double sr = 0., gsr = 0.;
+    if (!loadAudio(path.string().c_str(), src, sr) ||
+        !loadAudio(goldenRender.string().c_str(), golden, gsr) || long(sr) != long(gsr))
+    {
+      printf("%s: SKIP (read error)\n", stem.c_str());
+      ++skipped;
+      continue;
+    }
+
+    const auto goldScore =
+        ml::utu::scoreReconstruction(src.data(), src.size(), golden.data(), golden.size(), sr);
+
+    // current engine
+    auto r = ml::utu::computeAnalyzerParams(src.data(), src.size(), float(sr), budget);
+    auto partials = ml::utu::analyzeToPartials(src.data(), src.size(), r.params);
+    ml::cutHighs(*partials, r.hiCut);
+    ml::cleanOutliers(*partials);
+    if (partials->partials.empty())
+    {
+      printf("%s: FAIL (no partials from current engine)\n", stem.c_str());
+      ++failures;
+      continue;
+    }
+    ml::calcStats(*partials);
+    ml::utu::SynthParams sp;
+    sp.sampleRate = float(sr);
+    sp.fadeTime = 0.001f;
+    ml::utu::PartialSynthesizer synth;
+    synth.setParams(sp);
+    std::vector<float> out;
+    synth.render(*partials, out);
+    float peak = 0.f;
+    for (float v : out) peak = std::max(peak, fabsf(v));
+    if (peak > 1.f)
+      for (auto& v : out) v *= 0.999f / peak;
+    const auto curScore =
+        ml::utu::scoreReconstruction(src.data(), src.size(), out.data(), out.size(), sr);
+
+    bool fileOk = true;
+    auto cmp = [&](const char* what, float cur, float gold)
+    {
+      const float d = cur - gold;
+      const bool bad = d > kAbComponentSlack;
+      if (bad) fileOk = false;
+      printf("    %-10s %7.2f vs %7.2f (%+.2f)%s\n", what, cur, gold, d, bad ? "  REGRESSED" : "");
+    };
+    printf("%s:\n", stem.c_str());
+    cmp("spectral", curScore.spectralRmsDb, goldScore.spectralRmsDb);
+    cmp("watery", curScore.wateryDb, goldScore.wateryDb);
+    cmp("rustle", curScore.rustleDb, goldScore.rustleDb);
+    cmp("transients", curScore.transientDeficit, goldScore.transientDeficit);
+    if (curScore.total - goldScore.total > kAbTotalSlack)
+    {
+      printf("    total      %7.2f vs %7.2f  REGRESSED > %.1f\n", curScore.total,
+             goldScore.total, kAbTotalSlack);
+      fileOk = false;
+    }
+    else
+    {
+      printf("    total      %7.2f vs %7.2f\n", curScore.total, goldScore.total);
+    }
+
+    const fs::path goldenUtu = goldenDir / (stem + ".utu");
+    if (fs::exists(goldenUtu))
+    {
+      std::unique_ptr<ml::VutuPartialsData> gp(loadPartialsFile(goldenUtu.string()));
+      if (gp && !gp->partials.empty())
+      {
+        const double ratio =
+            double(partials->partials.size()) / double(gp->partials.size()) - 1.;
+        const bool bad = fabs(ratio) > kAbCountSlack;
+        if (bad) fileOk = false;
+        printf("    partials   %zu vs %zu (%+.1f%%)%s\n", partials->partials.size(),
+               gp->partials.size(), 100. * ratio, bad ? "  DRIFTED" : "");
+      }
+    }
+    if (!fileOk) ++failures;
+  }
+  printf("ab-dir: %zu files, %d failed, %d skipped\n", files.size(), failures, skipped);
+  return failures ? 1 : 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -1503,32 +1633,23 @@ int main(int argc, char** argv)
   {
     printf(
         "usage: utucompare <command>\n"
-        "  fft-test               RealFFT vs naive DFT\n"
-        "  window-test            Kaiser windows vs Loris\n"
-        "  spectrum-test <aiff>   reassigned spectrum vs Loris\n"
-        "  peaks-test <aiff>      peak selection + thinning vs Loris\n"
-        "  bandwidth-test <aiff>  peaks + residue bandwidth association vs Loris\n"
-        "  analyze-test <aiff>    full analysis + phase fix vs Loris::Analyzer\n"
-        "  synth-test [aiff]      bandwidth-enhanced synthesis vs Loris::Synthesizer\n"
-        "  auto-test <aiff|@sine|@harm|@bell|@noise>  automatic analysis parameters\n"
-        "  convert-dir <dir> [budget]   auto-analyze + resynthesize every audio file\n"
-        "  score <src> <render>         reconstruction metrics\n"
-        "  tune <file> [budget]         coordinate-descent parameter search vs the score\n");
+        "  selftest [filter]      ground-truth checks on synthetic signals\n"
+        "  auto-test <aiff|@sine|@harm|@bell|@noise|@short|@sine96>  automatic parameters\n"
+        "  convert-dir <dir> [budget]      auto-analyze + resynthesize every audio file\n"
+        "  ab-dir <dir> <goldendir> [budget]  score current engine vs golden renders\n"
+        "  score <src> <render>            reconstruction metrics\n"
+        "  tune <file> [budget]            coordinate-descent parameter search\n");
     return 2;
   }
   const std::string cmd(argv[1]);
+  if (cmd == "selftest") return selfTest(argc > 2 ? argv[2] : nullptr);
   if (cmd == "auto-test" && argc > 2) return autoTest(argv[2]);
   if (cmd == "convert-dir" && argc > 2)
     return convertDir(argv[2], argc > 3 ? atoi(argv[3]) : 64);
+  if (cmd == "ab-dir" && argc > 3)
+    return abDir(argv[2], argv[3], argc > 4 ? atoi(argv[4]) : 64);
   if (cmd == "score" && argc > 3) return scoreCmd(argv[2], argv[3]);
   if (cmd == "tune" && argc > 2) return tuneCmd(argv[2], argc > 3 ? atoi(argv[3]) : 64);
-  if (cmd == "fft-test") return fftTest();
-  if (cmd == "window-test") return windowTest();
-  if (cmd == "spectrum-test" && argc > 2) return spectrumTest(argv[2]);
-  if (cmd == "peaks-test" && argc > 2) return peaksTest(argv[2], false);
-  if (cmd == "bandwidth-test" && argc > 2) return peaksTest(argv[2], true);
-  if (cmd == "analyze-test" && argc > 2) return analyzeTest(argv[2]);
-  if (cmd == "synth-test") return synthTest(argc > 2 ? argv[2] : nullptr);
   printf("unknown command '%s'\n", cmd.c_str());
   return 2;
 }

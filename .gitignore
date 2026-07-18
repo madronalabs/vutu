@@ -207,3 +207,5 @@ packages/
 
 #Test files
 *.testsettings
+build-tools/
+goldens/
