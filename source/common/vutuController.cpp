@@ -19,7 +19,7 @@
 #include "mlvg.h"
 //#include "miniz.h"
 
-// vutu analysis library, replacing Loris
+// vutu analysis library
 #include "utuAnalyzer.h"
 #include "utuSynth.h"
 

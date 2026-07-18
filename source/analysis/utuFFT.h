@@ -13,7 +13,7 @@ namespace ml::utu
 
 // Real-input forward FFT for power-of-two lengths, wrapping the vendored
 // FFTReal (Laurent de Soras). Emits bins 0..N/2 as separate re/im arrays
-// using the convention X[k] = sum x[n]·exp(-i·2π·k·n/N), matching Loris/FFTW,
+// using the convention X[k] = sum x[n]·exp(-i·2π·k·n/N), matching FFTW,
 // with no output scaling.
 class RealFFT
 {

@@ -40,11 +40,11 @@ struct BuildingPartial
   }
 };
 
-// Port of Loris PartialBuilder with a flat frequency reference: kept peaks,
-// taken in ascending frequency, either extend the nearest eligible partial
-// within freqDrift or start new partials; a frame's touched partials become
-// the next frame's eligible set. Streaming-friendly: consumes one frame at
-// a time; partials that leave the eligible set are final.
+// Partial tracker with a flat frequency reference: kept peaks, taken in
+// ascending frequency, either extend the nearest eligible partial within
+// freqDrift or start new partials; a frame's touched partials become the
+// next frame's eligible set. Streaming-friendly: consumes one frame at a
+// time; partials that leave the eligible set are final.
 class PartialTracker
 {
  public:

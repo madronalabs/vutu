@@ -5,6 +5,25 @@ Reference: Fitz & Fulop, *A Unified Theory of Time-Frequency Reassignment*
 North-star goal: a real-time signal → bandwidth-enhanced-partials engine with
 reasonable latency and CPU.
 
+## v3 clean-room rewrite (2026-07-18)
+
+The pipeline modules (window, spectrum, peaks, tracker, bandwidth, phasefix,
+synth, analyzer shell) were re-implemented from the paper, the published
+Kaiser & Schafer formulas, and this file's behavioral specs — no Loris
+source consulted; the v2 modules those specs annotated were written against
+Loris and are gone from the tree (git history keeps them). Conventions and
+scalings are pinned by `utucompare selftest`, fourteen ground-truth checks
+on synthetic signals, calibrated on v2 before the swap; `ab-dir` scores any
+engine against golden renders. v2-original modules (utuFFT, utuAutoParams,
+utuMetrics) carry over. Parameters are now **window-primary**: windowWidth
+is the master knob and zeros derive resolution = W/2, noiseWidth = W/3.4,
+hop = 1/W, cropTime = hop, sidelobe = −ampFloor; explicit values override
+(`bwRegionWidth` is renamed `noiseWidth`; disabling association is now the
+`associateNoise` flag). The analyzer shell streams over a compacting
+history vector (DSPBuffer no longer used); the synth integrates per-sample
+in double with the same model formula and noise calibration (measured:
+sine null −140 dB vs v2's −118; noise-render RMS +0.3 dB vs −2.1).
+
 ## Theory → code
 
 | Paper | Code |
