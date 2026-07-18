@@ -41,6 +41,11 @@ struct AnalyzerParams
   float sidelobeLevel{0.f};   // dB; 0 -> -ampFloor
   float hopTime{0.f};         // s; 0 -> 1/windowWidth
   float cropTime{0.f};        // s; 0 -> hopTime
+  float hopJitter{0.f};       // fraction of a hop (0..0.5); each frame center
+                              // is offset by a uniform random ±hopJitter·hop.
+                              // Experiment: decorrelates frame-rate-coherent
+                              // artifacts (the flanged/ratcheting residue on
+                              // breathy material). 0 = off, the regular grid
   bool associateNoise{true};  // false disables residue bandwidth association
   bool phaseCorrect{true};
 };
@@ -84,7 +89,9 @@ class PartialAnalyzer
   int64_t _historyStart{0};
 
   long _hopSamples{0};
-  int64_t _frameSample{0};  // center of the next frame, in samples from input start
+  long _maxJitterSamples{0};
+  uint32_t _jitterState{0};
+  int64_t _frameSample{0};  // nominal center of the next frame (un-jittered grid)
   int64_t _samplesPushed{0};
   bool _configured{false};
 };

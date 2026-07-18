@@ -10,6 +10,7 @@
 #include "utuAnalyzer.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "utuPhaseFix.h"
 
@@ -48,6 +49,8 @@ void PartialAnalyzer::configure(const AnalyzerParams& p)
   _selector.configure(q.sampleRate, q.cropTime);
   // truncated: the frame grid must land on integer samples
   _hopSamples = std::max(1L, long(q.hopTime * q.sampleRate));
+  q.hopJitter = std::min(0.5f, std::max(0.f, q.hopJitter));
+  _maxJitterSamples = (q.hopJitter > 0.f) ? long(q.hopJitter * _hopSamples + 1.f) : 0;
   if (q.associateNoise)
   {
     // residue is gated at half a hop so each residue quantum lands in the
@@ -66,27 +69,43 @@ void PartialAnalyzer::reset()
   _historyStart = 0;
   _frameSample = 0;
   _samplesPushed = 0;
+  _jitterState = 0x9e3779b9u;
   _tracker.reset();
 }
 
 void PartialAnalyzer::processHop()
 {
+  // the analysis grid stays regular; each frame's center is offset by a
+  // deterministic uniform draw of up to ±hopJitter·hop. Breakpoints store
+  // the actual jittered center, so times and phases stay exact — jitter
+  // only decorrelates whatever artifacts ride on a strictly periodic frame
+  // grid
+  int64_t center = _frameSample;
+  if (_params.hopJitter > 0.f)
+  {
+    _jitterState = _jitterState * 1664525u + 1013904223u;
+    const float u = float(int32_t(_jitterState)) * (1.f / 2147483648.f);  // [-1, 1)
+    center += int64_t(lround(u * _params.hopJitter * _hopSamples));
+    center = std::min(std::max(center, int64_t(0)), _samplesPushed - 1);
+  }
+
   _spectrum.transform(_history.data(), long(_history.size()),
-                      long(_frameSample - _historyStart));
+                      long(center - _historyStart));
   _selector.selectPeaks(_spectrum, _params.freqFloor, _peakFrame);
   thinPeaks(_peakFrame, _params.resolution, _params.ampFloor,
-            _frameSample / double(_params.sampleRate));
+            center / double(_params.sampleRate));
   if (_params.associateNoise)
   {
     _bwAssociator.associateBandwidth(_peakFrame);
   }
-  _tracker.buildFrame(_peakFrame, _frameSample);
+  _tracker.buildFrame(_peakFrame, center);
   _frameSample += _hopSamples;
 
   // drop history no future frame reaches (window left edge of the next
-  // frame); the transform sees zeros outside the kept range anyway
+  // frame, less the jitter allowance); the transform sees zeros outside
+  // the kept range anyway
   const long half = (windowLength() - 1) / 2;
-  const int64_t needed = _frameSample - half;
+  const int64_t needed = _frameSample - _maxJitterSamples - half;
   if (needed - _historyStart > 4 * _hopSamples)
   {
     const long drop = long(needed - _historyStart);
@@ -100,11 +119,12 @@ void PartialAnalyzer::pushSamples(const float* src, size_t n)
   _history.insert(_history.end(), src, src + n);
   _samplesPushed += n;
 
-  // a frame is ready once the window's right edge is inside the input;
-  // the first frames' left edges see leading zeros (frame 0 is centered on
-  // sample 0, as if preceded by half a window of silence)
+  // a frame is ready once the window's right edge is inside the input even
+  // at the largest jitter offset; the first frames' left edges see leading
+  // zeros (frame 0 is centered on sample 0, as if preceded by half a
+  // window of silence)
   const long half = (windowLength() - 1) / 2;
-  while (_frameSample + half < _samplesPushed)
+  while (_frameSample + _maxJitterSamples + half < _samplesPushed)
   {
     processHop();
   }

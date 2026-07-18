@@ -37,15 +37,17 @@ struct AutoAnalyzerParams
                                   // false: every quality ladder was exhausted
   float activeDuration{0.f};      // seconds of non-silent material measured
 
-  // regime diagnostics: dense material (measured beating / dispersed
-  // spacings) has its window chosen first, wide enough to merge the beat
-  // cluster, with resolution following as half the main lobe
-  bool dense{false};
+  // window-decision diagnostics: when the tonal band envelopes carry
+  // audibly-loud fast modulation, temporal stability drives the window —
+  // wide enough (short enough in time) to merge the modulation cluster and
+  // track it as amplitude envelopes — and resolution follows as half the
+  // main lobe. Otherwise frequency spacing drives the window.
+  bool modDriven{false};
   float beatIndexDb{-120.f};  // absolute beat-band modulation index of the
                               // tonal band envelopes, dB
-  float beatFraction{0.f};    // beat-band share of all modulation from 2 Hz up
+  float beatFraction{0.f};    // beat-band share of all modulation (diagnostic)
   float beatRateHz{0.f};      // p90 beat rate
-  float mergeWindowHz{0.f};   // minimum window width demanded by the beats
+  float wDemandHz{0.f};       // beatRate90/0.3, the pre-clamp window demand
 };
 
 // Estimate analysis parameters likely to produce a faithful reconstruction

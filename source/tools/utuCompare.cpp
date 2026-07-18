@@ -1025,9 +1025,16 @@ void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
           r.minSpacingHz);
   fprintf(f, "  noise floor  %8.1f dB      active dur  %8.2f s\n", r.noiseFloorDb,
           r.activeDuration);
-  fprintf(f, "  regime: %s (beat index %.1f dB, fraction %.2f, rate %.1f Hz, merge W %.1f Hz)\n",
-          r.dense ? "dense" : "sparse", r.beatIndexDb, r.beatFraction, r.beatRateHz,
-          r.mergeWindowHz);
+  if (r.modDriven)
+  {
+    fprintf(f, "  window: mod-driven (index %.1f dB, rate90 %.1f Hz, demand %.1f -> W %.1f)\n",
+            r.beatIndexDb, r.beatRateHz, r.wDemandHz, r.params.windowWidth);
+  }
+  else
+  {
+    fprintf(f, "  window: spacing-driven (index %.1f dB, rate90 %.1f Hz, fraction %.2f)\n",
+            r.beatIndexDb, r.beatRateHz, r.beatFraction);
+  }
   fprintf(f, "  budget use   %d/%d (p90, %s)\n", r.probedSimultaneousP90, r.budget,
           r.budgetLimited ? "budget-limited" : "ladders exhausted");
 }
@@ -1078,11 +1085,11 @@ int autoTest(const char* path)
   inRange(r.hiCut, 200, 20000, "hiCut");
   inRange(r.params.noiseWidth, 10, 5000, "noiseWidth");
 
-  // the walk must land at or under the target, and must terminate for one
-  // of the two legitimate reasons
-  if (r.probedSimultaneousP90 > budget - 8)
+  // the ascent may spend the full budget (probe p90 overestimates the
+  // achieved count), but never more
+  if (r.probedSimultaneousP90 > budget)
   {
-    printf("  WALK OVERSHOT: p90 %d > target %d\n", r.probedSimultaneousP90, budget - 8);
+    printf("  WALK OVERSHOT: p90 %d > budget %d\n", r.probedSimultaneousP90, budget);
     pass = false;
   }
 
@@ -1495,6 +1502,97 @@ ml::VutuPartialsData* loadPartialsFile(const std::string& path)
   return ml::jsonToVutuPartials(json);
 }
 
+// convert <file> [key=val ...]: auto-params with manual overrides, then
+// analyze + render, writing a suffix-tagged wav beside the source. The
+// ear-sweep tool: `convert huygens.wav windowWidth=200 hopJitter=0.25`
+int convertCmd(int argc, char** argv)
+{
+  const char* path = argv[2];
+  std::vector<float> x;
+  double sr = 0.;
+  if (!loadAudio(path, x, sr)) return 2;
+
+  int budget = 64;
+  for (int i = 3; i < argc; ++i)
+  {
+    if (strncmp(argv[i], "budget=", 7) == 0) budget = atoi(argv[i] + 7);
+  }
+  auto r = ml::utu::computeAnalyzerParams(x.data(), x.size(), float(sr), budget);
+  printf("%s: %zu samples at %g Hz\n", path, x.size(), sr);
+  printAutoParams(stdout, r);
+
+  ml::utu::AnalyzerParams p = r.params;
+  float hiCut = r.hiCut;
+  std::string suffix;
+  for (int i = 3; i < argc; ++i)
+  {
+    const char* kv = argv[i];
+    const char* eq = strchr(kv, '=');
+    if (!eq) continue;
+    const std::string key(kv, eq - kv);
+    const float val = float(atof(eq + 1));
+    if (key == "windowWidth") p.windowWidth = val;
+    else if (key == "resolution") p.resolution = val;
+    else if (key == "noiseWidth") p.noiseWidth = val;
+    else if (key == "ampFloor") p.ampFloor = val;
+    else if (key == "loCut") p.freqFloor = val;
+    else if (key == "hiCut") hiCut = val;
+    else if (key == "freqDrift") p.freqDrift = val;
+    else if (key == "hopTime") p.hopTime = val;
+    else if (key == "cropTime") p.cropTime = val;
+    else if (key == "hopJitter") p.hopJitter = val;
+    else if (key == "budget") { suffix += "-budget_" + std::string(eq + 1); continue; }
+    else
+    {
+      printf("unknown override '%s'\n", kv);
+      return 2;
+    }
+    std::string tag = std::string(eq + 1);
+    for (auto& ch : tag) if (ch == '.') ch = '_';
+    suffix += "-" + key + "_" + tag;
+    printf("  override: %s = %g\n", key.c_str(), val);
+  }
+
+  auto partials = ml::utu::analyzeToPartials(x.data(), x.size(), p);
+  ml::cutHighs(*partials, hiCut);
+  ml::cleanOutliers(*partials);
+  if (partials->partials.empty())
+  {
+    printf("analysis produced no partials\n");
+    return 1;
+  }
+  ml::calcStats(*partials);
+  printf("  analysis: %zu partials, max simultaneous %zu\n", partials->partials.size(),
+         partials->stats.maxActivePartials);
+
+  ml::utu::SynthParams sp;
+  sp.sampleRate = float(sr);
+  sp.fadeTime = 0.001f;
+  ml::utu::PartialSynthesizer synth;
+  synth.setParams(sp);
+  std::vector<float> out;
+  synth.render(*partials, out);
+  float peak = 0.f;
+  for (float v : out) peak = std::max(peak, fabsf(v));
+  if (peak > 1.f)
+    for (auto& v : out) v *= 0.999f / peak;
+
+  namespace fs = std::filesystem;
+  const fs::path in(path);
+  std::string ext = in.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(),
+                 [](unsigned char ch) { return char(std::tolower(ch)); });
+  const int fmt = ((ext == ".wav") ? SF_FORMAT_WAV : SF_FORMAT_AIFF) | SF_FORMAT_PCM_24;
+  const fs::path outPath =
+      in.parent_path() / (in.stem().string() + "-conv" + suffix + in.extension().string());
+  if (!writeAudio(outPath.string(), out.data(), out.size(), sr, fmt)) return 2;
+
+  const auto s = ml::utu::scoreReconstruction(x.data(), x.size(), out.data(), out.size(), sr);
+  printScore(stdout, s);
+  printf("wrote %s\n", outPath.string().c_str());
+  return 0;
+}
+
 // render <file.utu> <out.wav> [sr]: synthesize saved partials — separates
 // analysis regressions from synthesis regressions when chasing scores
 int renderCmd(const char* utuPath, const char* outPath, double sr)
@@ -1668,6 +1766,9 @@ int main(int argc, char** argv)
         "usage: utucompare <command>\n"
         "  selftest [filter]      ground-truth checks on synthetic signals\n"
         "  auto-test <aiff|@sine|@harm|@bell|@noise|@short|@sine96>  automatic parameters\n"
+        "  convert <file> [key=val ...]    one-file convert with param overrides\n"
+        "        keys: windowWidth resolution noiseWidth ampFloor loCut hiCut\n"
+        "              freqDrift hopTime cropTime hopJitter budget\n"
         "  convert-dir <dir> [budget]      auto-analyze + resynthesize every audio file\n"
         "  ab-dir <dir> <goldendir> [budget]  score current engine vs golden renders\n"
         "  score <src> <render>            reconstruction metrics\n"
@@ -1680,6 +1781,7 @@ int main(int argc, char** argv)
     return renderCmd(argv[2], argv[3], argc > 4 ? atof(argv[4]) : 44100.);
   if (cmd == "selftest") return selfTest(argc > 2 ? argv[2] : nullptr);
   if (cmd == "auto-test" && argc > 2) return autoTest(argv[2]);
+  if (cmd == "convert" && argc > 2) return convertCmd(argc, argv);
   if (cmd == "convert-dir" && argc > 2)
     return convertDir(argv[2], argc > 3 ? atoi(argv[3]) : 64);
   if (cmd == "ab-dir" && argc > 3)

@@ -132,8 +132,10 @@ struct Ctx
   float spacingDom{0}, spacingConf{0}, spacingMin{0};
   float f0{0}, pitchConf{0};
   bool pitched{false}, unpitched{false};
-  bool dense{false};   // beating/dispersed material: window chosen first
-  float mergeW{0};     // Hz, minimum window width that merges the beat cluster
+
+  // window decision (chooseWindow)
+  bool modDriven{false};  // audibly-loud fast modulation: window chosen first
+  float wDemand{0};       // Hz, beatRate90/0.3 — pre-clamp window demand
 };
 
 // ---------------------------------------------------------------------------
@@ -813,168 +815,85 @@ void stage2(Ctx& c)
 }
 
 // ---------------------------------------------------------------------------
-// regime classification. A component pair at spacing d has three fates
-// under a window of main-lobe width W: merged (d < 0.3·W, its beat is
-// tracked as an amplitude envelope — correct), resolved (d > 0.5·W, two
-// partials — correct), or the partially-resolved bad zone in between,
-// where unstable candidates get masked or rejected frame by frame and
-// their energy is misclassified as noise. Dense material (beating decays,
-// chords, polyphony) is detected primarily from the measured beat spectrum
-// (stage 1b) — averaged-spectrum spacing statistics cannot see
-// sub-resolution pairs — and secondarily from spacing dispersion. The
-// window must then be wide enough to put the beat cluster in the merge
-// zone: W >= cluster / 0.3.
+// stage 3: the window decision.
+//
+// A component pair at spacing d has three fates under a window of main-lobe
+// width W: merged (d < 0.3·W, its beat is tracked as an amplitude envelope
+// — correct), resolved (d > 0.5·W, two partials — correct), or the
+// partially-resolved bad zone in between, where unstable candidates get
+// masked or rejected frame by frame and their energy is misclassified as
+// noise.
+//
+// The window floor comes from temporal stability, not frequency spacing:
+// when the tonal band envelopes carry audibly-loud fast modulation
+// (beating decays, chords, vocal roughness), the analysis must merge that
+// modulation cluster and track it as amplitude envelopes — W >= rate/0.3 —
+// with the frame rate (= W) keeping up. Spacing statistics cannot see this
+// need: sub-resolution pairs merge in the averaged spectrum, and a share-
+// of-modulation gate hides a vocal's real fast roughness behind its louder
+// slow vibrato (the old beatFraction gate discarded exactly the sounds
+// that needed the wide window — huygens measured index +12.9 dB, fraction
+// 0.03). Only when no such modulation is measured does spacing set the
+// window.
+//
+// Ear calibration (2026-07-18, huygens / gambang2 / cello / 1977):
+//   kModIndexGateDb  +5   between cello -4.5 dB (spacing window correct by
+//                         ear) and huygens +12.9 dB (needs the mod window)
+//   kModRateGateHz   30   rejects the DC skirt of decay envelopes leaking
+//                         into the bottom modulation bins (@bell pins at
+//                         15.2 Hz, the band edge)
+//   kWModLo         150   below, complex sounds smear toward a primitive-
+//                         PSOLA time-stretch quality (1977 sweep)
+//   kWModHi         300   above, partials never find stability and the
+//                         render goes watery (1977's auto 649 was clearly
+//                         too high); every ear optimum so far is 150-305
 
-void classifyRegime(Ctx& c)
+constexpr float kModIndexGateDb = 5.f;
+constexpr float kModRateGateHz = 30.f;
+constexpr float kWModLo = 150.f;
+constexpr float kWModHi = 300.f;
+
+// at least ~3 window lengths within the sound (window length ≈ 8/W s)
+float windowFloor(const Ctx& c)
 {
-  // Three gates, one per impostor: the absolute index rejects the
-  // resonator's residual image ripple (~-33 dB vs -10..+20 dB for real
-  // beats); the fraction rejects material ruled by slow modulation
-  // (vibrato/tremolo/breath — real beat energy, but subordinate, and the
-  // sparse regime serves it better); the rate floor rejects the DC skirt
-  // of decay envelopes leaking into the bottom modulation bins (harmless
-  // to real dense material: beats under 30 Hz demand a merge window no
-  // wider than the sparse rule already provides).
-  if ((c.beatIndexDb > -25.f) && (c.beatFraction > 0.15f) && (c.beatRate90 > 30.f))
-  {
-    c.dense = true;
-    c.mergeW = c.beatRate90 / 0.3f;
-  }
-  if ((c.spacingConf >= 0.4f) && (c.sigPeaks.size() >= 3))
-  {
-    std::vector<float> subCluster;
-    for (size_t i = 1; i < c.sigPeaks.size(); ++i)
-    {
-      const float d = float(c.sigPeaks[i].freq - c.sigPeaks[i - 1].freq);
-      if (d < 0.5f * c.spacingDom) subCluster.push_back(d);
-    }
-    if (subCluster.size() >= 3)
-    {
-      c.dense = true;
-      c.mergeW = std::max(c.mergeW, percentile(std::move(subCluster), 0.9f) / 0.3f);
-    }
-  }
+  return std::max(kWidthLo, float(24. / std::max(0.05, c.activeDuration)));
 }
 
-// ---------------------------------------------------------------------------
-// stage 3: resolution and window width with anti-aliasing guard
-
-// derive the window width for a given resolution (called again whenever the
-// quality ladder changes resolution)
-float deriveWindowWidth(const Ctx& c, float resolution)
-{
-  // absolute frame-rate cap, independent of resolution: linear
-  // interpolation of a sampled envelope at modulation rate r has peak error
-  // ≈ (π·r/F)²/2, ≤14% at F = 6r. Modulation faster than the cap belongs to
-  // bandwidth enhancement; chasing it with frame rate turns estimator
-  // jitter into synthesized FM noise. Dense material is exempt from the
-  // sustained-material cap: it was derived from the broadband RMS envelope,
-  // which is blind to the per-partial beating that demands the higher rate
-  const float fMax =
-      (c.transients || c.dense) ? 500.f : std::max(250.f, float(6. * c.r95));
-
-  // at least ~3 window lengths within the sound (window length ≈ 8/W s)
-  const float wFloor = std::max(kWidthLo, float(24. / std::max(0.05, c.activeDuration)));
-
-  float w = std::min({2.f * resolution, fMax, kWidthHi});
-  // the merge demand overrides: beats must land in the merge zone
-  if (c.mergeW > 0.f)
-  {
-    w = std::max(w, std::min(c.mergeW, kWidthHi));
-  }
-  w = std::max(w, wFloor);
-
-  // anti-beating guard. The frame rate F samples every partial's envelopes;
-  // interference between components at spacing d rides on them at d Hz.
-  // Resolved spacings (d > W/2) leave sidelobe-level residue that aliases
-  // to near-DC wobble when d lands near a multiple of F — keep it at least
-  // F/8 away. Unresolved spacings merge into one beating track; the beat is
-  // representable when d < 0.3·W but between 0.3·W and 0.5·W it is
-  // critically sampled and warbles — keep spacings out of that band.
-  std::vector<float> strongSpacings;
-  if (c.spacingDom > 0.f)
-  {
-    strongSpacings.push_back(c.spacingDom);
-    strongSpacings.push_back(2.f * c.spacingDom);
-  }
-  for (size_t i = 1; i < std::min(c.sigPeaks.size(), size_t(6)); ++i)
-  {
-    strongSpacings.push_back(float(c.sigPeaks[i].freq - c.sigPeaks[i - 1].freq));
-  }
-  auto violates = [&](float W)
-  {
-    const long hopSamples = std::max(1L, long(c.sr / W));
-    const float F = float(c.sr / hopSamples);  // actual frame rate
-    for (float d : strongSpacings)
-    {
-      const float ratio = d / W;
-      if ((ratio > 0.3f) && (ratio < 0.5f)) return true;
-      if (d > 0.5f * W)
-      {
-        const float k = floorf(d / F + 0.5f);
-        if ((k >= 1.f) && (fabsf(d - k * F) < F / 8.f)) return true;
-      }
-    }
-    return false;
-  };
-  if (violates(w))
-  {
-    // nudge around the working width (±25%, nearest first). The band is
-    // relative to w rather than to resolution because the frame-rate cap
-    // can bind below 2·resolution; downward moves are always safe against
-    // the cap, upward moves must respect it
-    const float lo = std::max({wFloor, kWidthLo, 0.75f * w, 1.05f * resolution});
-    const float hi = std::min({kWidthHi, fMax, 1.25f * w});
-    bool fixed = false;
-    for (float step = 0.02f * w; !fixed && (step <= 0.25f * w); step += 0.02f * w)
-    {
-      for (float cand : {w - step, w + step})
-      {
-        if ((cand >= lo) && (cand <= hi) && !violates(cand))
-        {
-          w = cand;
-          fixed = true;
-          break;
-        }
-      }
-    }
-  }
-
-  return clampf(w, kWidthLo, kWidthHi);
-}
-
+// resolution moves (quality walk, unpitched material only) keep W = 2·res
 void applyResolution(const Ctx& c, AnalyzerParams& p, float resolution)
 {
   p.resolution = clampf(resolution, kResolutionLo, kResolutionHi);
-  p.windowWidth = deriveWindowWidth(c, p.resolution);
+  p.windowWidth = clampf(std::max(2.f * p.resolution, windowFloor(c)), kWidthLo, kWidthHi);
 }
 
-void stage3(Ctx& c, AnalyzerParams& p)
+void chooseWindow(Ctx& c, AnalyzerParams& p)
 {
-  float res;
-  if (c.dense && (c.mergeW > 0.f))
+  c.modDriven = (c.beatIndexDb > kModIndexGateDb) && (c.beatRate90 > kModRateGateHz);
+  if (c.modDriven)
   {
-    // dense regime: the window is chosen first (wide enough to merge the
-    // beat cluster) and resolution follows as half the main lobe, so
-    // everything the window resolves is kept — nothing partially-resolved
-    // survives to be masked into noise. Budget pressure is handled by the
-    // quality walk's amplitude floor
-    res = 0.5f * std::min(c.mergeW, kWidthHi);
+    // temporal stability drives the window; resolution follows as half the
+    // main lobe so everything the window resolves is kept — nothing
+    // partially-resolved survives to be masked into noise. Budget pressure
+    // is handled by the quality walk's amplitude floor
+    c.wDemand = c.beatRate90 / 0.3f;
+    const float w = clampf(std::max(clampf(c.wDemand, kWModLo, kWModHi), windowFloor(c)),
+                           kWidthLo, kWidthHi);
+    p.windowWidth = w;
+    p.resolution = clampf(0.5f * w, kResolutionLo, kResolutionHi);
   }
   else if (c.unpitched)
   {
     // spread the partial budget across the occupied band: kept-peak density
     // after ±resolution masking is about one track per 1.25·resolution
     const float band = std::max(200.f, c.hiCut - c.loCut);
-    res = band / (0.8f * c.budget);
+    applyResolution(c, p, band / (0.8f * c.budget));
   }
   else
   {
     // 0.8: the masking radius must sit below the smallest real spacing,
     // with headroom for inharmonic stretch and vibrato excursion
-    res = 0.8f * c.spacingMin;
+    applyResolution(c, p, 0.8f * c.spacingMin);
   }
-  applyResolution(c, p, res);
   p.freqFloor = c.loCut;
   p.ampFloor = c.ampFloorV1;
   p.sidelobeLevel = 90.f;  // never coupled to ampFloor: budget-driven floor
@@ -1137,7 +1056,7 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
         hiCut /= kThirdOctave;
         changed = true;
       }
-      else if (c.unpitched && (p.resolution * 1.25f <= kResolutionHi))
+      else if (c.unpitched && !c.modDriven && (p.resolution * 1.25f <= kResolutionHi))
       {
         applyResolution(c, p, p.resolution * 1.25f);
         probe = probeFrames(c, p);
@@ -1153,7 +1072,8 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
   {
     // knob order: hiCut up, ampFloor down, loCut down, resolution down
     // (unpitched only — finer-than-spacing resolution on pitched material
-    // recreates the unstable-frequency pathology)
+    // recreates the unstable-frequency pathology, and mod-driven material
+    // must keep resolution = W/2, the merge-clean invariant)
     enum
     {
       kKnobHiCut,
@@ -1162,9 +1082,8 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
       kKnobRes,
       kNumKnobs
     };
-    bool frozen[kNumKnobs] = {false, false, false, !c.unpitched};
-    const float wFloor = std::max(kWidthLo, float(24. / std::max(0.05, c.activeDuration)));
-    const float resMin = std::max(kResolutionLo, 0.5f * wFloor);
+    bool frozen[kNumKnobs] = {false, false, false, !c.unpitched || c.modDriven};
+    const float resMin = std::max(kResolutionLo, 0.5f * windowFloor(c));
 
     while (!(frozen[kKnobHiCut] && frozen[kKnobFloor] && frozen[kKnobLoCut] && frozen[kKnobRes]))
     {
@@ -1192,7 +1111,10 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
               frozen[knob] = true;
               continue;
             }
-            trial.ampFloor = std::max(kAmpFloorLo, p.ampFloor - 6.f);
+            // finer steps than the down-walk's 6 dB: the floor is the knob
+            // that restores quiet high harmonics, and a coarse last step
+            // from within a few dB of -90 gets refused wholesale
+            trial.ampFloor = std::max(kAmpFloorLo, p.ampFloor - 3.f);
             break;
           case kKnobLoCut:
             if (p.freqFloor <= kLoCutLo)
@@ -1216,7 +1138,12 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
 
         const ProbeData& eval = reprobed ? trialProbe : probe;
         const int trialCnt = countP90(eval, trial.ampFloor, trial.freqFloor, trialHiCut);
-        if (trialCnt <= target)
+        // the ascent accepts up to the full budget, not the down-walk's
+        // target: probe p90 is taken at the deliberately-busiest sites and
+        // overestimates the achieved global count (measured: probe 55 vs
+        // achieved 29 on gambang2), so stopping 8 under the budget starves
+        // real quality — cello left 18 partials unspent and lost its highs
+        if (trialCnt <= c.budget)
         {
           p = trial;
           hiCut = trialHiCut;
@@ -1232,17 +1159,20 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
     }
   }
 
-  // freqDrift: pass the movement real tracks exhibit at the final hop (p95
-  // with headroom), but stay under half the minimum kept spacing so a track
-  // cannot capture its neighbor
+  // freqDrift: pass the movement real tracks exhibit at the final hop, but
+  // stay under half the resolution so a track cannot capture its neighbor.
+  // 3x the measured p95: crossing and interfering tracks censor the
+  // hop-delta statistic, so the raw estimate reads low — both tune runs
+  // that improved by ear landed at ~2x the old 1.5x rule (gambang2
+  // 2.3 -> 4.6; the same lesson was recorded on the Careless polyphony)
   if (!probe.hopDeltas.empty())
   {
     const float p95 = percentile(probe.hopDeltas, 0.95f);
-    p.freqDrift = clampf(1.5f * p95, kDriftLo, std::min(kDriftHi, 0.5f * p.resolution));
+    p.freqDrift = clampf(3.f * p95, 3.f, std::min(kDriftHi, 0.5f * p.resolution));
   }
   else
   {
-    p.freqDrift = clampf(0.2f * p.resolution, kDriftLo, std::min(kDriftHi, 0.5f * p.resolution));
+    p.freqDrift = clampf(0.2f * p.resolution, 3.f, std::min(kDriftHi, 0.5f * p.resolution));
   }
 
   out.probedSimultaneousP90 = cnt;
@@ -1279,25 +1209,24 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   stage1(c);
   stage2(c);
   stage1b(c);  // after stage 2: the beat band is capped by the spacing
-  classifyRegime(c);
-  stage3(c, out.params);
+  chooseWindow(c, out.params);
   out.hiCut = c.hiCut;
   out.budget = c.budget;
   walkQuality(c, out.params, out.hiCut, out);
 
-  // noise regions. Dense regime: the reassigned spectrum is clean of
+  // noise regions. Mod-driven: the reassigned spectrum is clean of
   // candidates out to about half the main lobe around each kept partial
   // (the consensus region admits no sign-crossings); junk candidates —
   // sidelobe artifacts, unresolved-pair interference — live beyond ~W/2.
   // The residue-collection radius must stay inside that clean zone, which
   // fixes the window/noiseWidth *ratio* (ear-calibrated: W 170 -> R 50).
   // This also restores self-similarity: every other frequency scale in the
-  // analyzer tracks W. Sparse regime: little junk exists and a small
+  // analyzer tracks W. Spacing-driven: little junk exists and a small
   // region would drop genuine inter-harmonic noise (regions without a kept
   // peak lose their residue), so regions stay wide: ~3 kept-peak spacings
   // up to the 2 kHz auditory-filter scale.
   constexpr float kWindowToNoiseRatio = 3.4f;
-  if (c.dense)
+  if (c.modDriven)
   {
     out.params.noiseWidth =
         clampf(out.params.windowWidth / kWindowToNoiseRatio, kNoiseWidthLo, 2000.f);
@@ -1322,11 +1251,11 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   out.noiseFloorDb = c.ampFloorV1 - 10.f;
   out.spacingHz = c.spacingDom;
   out.minSpacingHz = c.spacingMin;
-  out.dense = c.dense;
+  out.modDriven = c.modDriven;
   out.beatIndexDb = c.beatIndexDb;
   out.beatFraction = c.beatFraction;
   out.beatRateHz = c.beatRate90;
-  out.mergeWindowHz = c.mergeW;
+  out.wDemandHz = c.wDemand;
   const long hopSamples = std::max(1L, long(c.sr / out.params.windowWidth));
   out.frameRateHz = float(c.sr / hopSamples);
   out.activeDuration = float(c.activeDuration);
