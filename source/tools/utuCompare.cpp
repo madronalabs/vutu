@@ -1036,7 +1036,8 @@ void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
   fprintf(f, "  [%s]\n", kModeNames[r.searchMode]);
   fprintf(f, "  beat: index %.1f dB, rate90 %.1f Hz, fraction %.2f (%s noise regions)\n",
           r.beatIndexDb, r.beatRateHz, r.beatFraction, r.modDriven ? "tight" : "wide");
-  fprintf(f, "  budget use   %d/%d (p90, %s)\n", r.probedSimultaneousP90, r.budget,
+  fprintf(f, "  budget use   %d/%d achieved (probe p90 %d, %s)\n", r.achievedSimultaneous,
+          r.budget, r.probedSimultaneousP90,
           r.budgetLimited ? "budget-limited" : "ladders exhausted");
 }
 
@@ -1103,10 +1104,10 @@ int autoTest(const char* path)
     ml::calcStats(*partials);
     printf("  full analysis: %zu partials, max simultaneous %zu (budget %d)\n",
            partials->partials.size(), partials->stats.maxActivePartials, budget);
-    // the budget is enforced on probe statistics; allow tracker overlap slack
-    if (partials->stats.maxActivePartials > size_t(budget) * 5 / 4)
+    // the budget is verified against a full analysis and is a hard contract
+    if (partials->stats.maxActivePartials > size_t(budget))
     {
-      printf("  BUDGET EXCEEDED beyond tolerance\n");
+      printf("  BUDGET EXCEEDED\n");
       pass = false;
     }
   }

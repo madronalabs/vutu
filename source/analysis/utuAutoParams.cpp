@@ -1352,6 +1352,43 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   out.budget = c.budget;
   walkQuality(c, out.params, out.hiCut, out, std::move(probe));
 
+  // ground-truth budget verification: the probe p90 is a statistic taken
+  // at a handful of sites, not a guarantee — dense mixes have exceeded it
+  // (measured: probe 63, achieved 68). Run the real analysis at the final
+  // parameters and, while the achieved simultaneous count is over budget,
+  // step the quality ladder back: floor up in fine 1.5 dB steps (real
+  // material has harmonic shelves — a coarse step over one gives back far
+  // more partials than the budget asked; measured on cello: a 3 dB step
+  // dropped 66 -> 50 where 64 was the target), then hiCut down toward
+  // 2 kHz once the floor caps.
+  {
+    const float kThirdOctave = 1.259921f;
+    const float floorCap = std::min(kAmpFloorHi, c.ampFloorV1 + 15.f);
+    for (int guard = 0; guard < 24; ++guard)
+    {
+      auto partials = analyzeToPartials(c.x, c.n, out.params);
+      cutHighs(*partials, out.hiCut);
+      cleanOutliers(*partials);
+      if (partials->partials.empty()) break;
+      calcStats(*partials);
+      out.achievedSimultaneous = int(partials->stats.maxActivePartials);
+      if (out.achievedSimultaneous <= c.budget) break;
+      if (out.params.ampFloor + 1.5f <= floorCap)
+      {
+        out.params.ampFloor += 1.5f;
+      }
+      else if (out.hiCut / kThirdOctave >= 2000.f)
+      {
+        out.hiCut /= kThirdOctave;
+      }
+      else
+      {
+        break;  // out of ladder; leave the overshoot on record
+      }
+      out.budgetLimited = true;
+    }
+  }
+
   // noise regions. Mod-driven: the reassigned spectrum is clean of
   // candidates out to about half the main lobe around each kept partial
   // (the consensus region admits no sign-crossings); junk candidates —

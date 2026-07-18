@@ -32,6 +32,8 @@ struct AutoAnalyzerParams
   float minSpacingHz{0.f};        // 10th-percentile adjacent peak spacing
   float frameRateHz{0.f};         // actual frame rate after hop truncation
   int probedSimultaneousP90{0};   // p90 kept peaks per frame at final params
+  int achievedSimultaneous{0};    // verified max simultaneous partials from a
+                                  // full analysis at the final params (<= budget)
   int budget{0};                  // the requested simultaneous-partial budget
   bool budgetLimited{false};      // true: quality ascent stopped at the budget;
                                   // false: every quality ladder was exhausted
