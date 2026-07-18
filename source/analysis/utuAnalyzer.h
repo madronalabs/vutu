@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "MLDSPBuffer.h"
 #include "utuBandwidth.h"
 #include "utuPeaks.h"
 #include "utuSpectrum.h"
@@ -16,26 +15,33 @@
 namespace ml::utu
 {
 
-// Analysis parameters, mirroring Loris Analyzer::configure: a zero means
-// "derive the Loris default from resolution / windowWidth / ampFloor".
+// Analysis parameters. The window width is the master knob; a zero in any
+// other field derives it from the invariants the v2 tuning work found, and
+// an explicit nonzero value overrides.
 //
-// resolution and windowWidth are the separability choices of Fitz & Fulop
+// windowWidth and resolution are the separability choices of Fitz & Fulop
 // Sec. 5: components closer in frequency than the window's main lobe
 // (windowWidth), or events closer in time than the window length, cannot be
-// resolved — by reassignment or by anything else. The hop of 1/windowWidth
-// then critically samples the analysis in time.
+// resolved — by reassignment or by anything else. resolution = W/2 keeps
+// every pair either cleanly resolved or cleanly merged: nothing
+// partially-resolved survives thinning to become masked noise. The hop of
+// 1/windowWidth critically samples the analysis in time, and noiseWidth =
+// W/3.4 keeps the residue-collection radius inside the consensus-clean zone
+// around each kept partial (ear-calibrated; sparse sounds may want wider
+// regions — computeAnalyzerParams sets that by regime).
 struct AnalyzerParams
 {
   float sampleRate{48000.f};
-  float resolution{80.f};       // Hz, partial frequency spacing
-  float windowWidth{0.f};       // Hz, main lobe width; 0 -> 2·resolution
-  float ampFloor{-90.f};        // dB
-  float freqFloor{0.f};         // Hz; 0 -> resolution
-  float freqDrift{0.f};         // Hz; 0 -> 0.5·resolution
-  float sidelobeLevel{0.f};     // dB; 0 -> -ampFloor
-  float hopTime{0.f};           // s; 0 -> 1/windowWidth
-  float cropTime{0.f};          // s; 0 -> hopTime
-  float bwRegionWidth{2000.f};  // Hz; 0 disables residue bandwidth
+  float windowWidth{160.f};   // Hz, main lobe width — the master knob
+  float resolution{0.f};      // Hz; 0 -> windowWidth/2
+  float noiseWidth{0.f};      // Hz, residue region width; 0 -> windowWidth/3.4
+  float ampFloor{-90.f};      // dB
+  float freqFloor{0.f};       // Hz; 0 -> resolution
+  float freqDrift{0.f};       // Hz; 0 -> 0.5·resolution
+  float sidelobeLevel{0.f};   // dB; 0 -> -ampFloor
+  float hopTime{0.f};         // s; 0 -> 1/windowWidth
+  float cropTime{0.f};        // s; 0 -> hopTime
+  bool associateNoise{true};  // false disables residue bandwidth association
   bool phaseCorrect{true};
 };
 
@@ -70,11 +76,15 @@ class PartialAnalyzer
   PeakSelector _selector;
   AssociateBandwidth _bwAssociator;
   PartialTracker _tracker;
-  DSPBuffer _buffer;
   PeakFrame _peakFrame;
-  std::vector<float> _windowScratch;
+
+  // history of recent input: absolute sample _historyStart + i lives at
+  // _history[i]; the front is dropped once frames no longer reach it
+  std::vector<float> _history;
+  int64_t _historyStart{0};
+
   long _hopSamples{0};
-  int64_t _frameSample{0};    // center of the next frame, in samples from input start
+  int64_t _frameSample{0};  // center of the next frame, in samples from input start
   int64_t _samplesPushed{0};
   bool _configured{false};
 };

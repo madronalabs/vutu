@@ -369,11 +369,13 @@ int VutuController::analyzeSample()
   utu::AnalyzerParams analyzerParams;
   analyzerParams.sampleRate = sr;
   analyzerParams.resolution = res;
-  analyzerParams.windowWidth = width;
+  // legacy presets may carry only a resolution; the analyzer is
+  // window-primary now
+  analyzerParams.windowWidth = (width > 0.f) ? width : 2.f * res;
   analyzerParams.freqDrift = drift;
   analyzerParams.ampFloor = floor;
   analyzerParams.freqFloor = loCut;
-  analyzerParams.bwRegionWidth = noiseWidth;
+  analyzerParams.noiseWidth = noiseWidth;
 
   auto newPartials = utu::analyzeToPartials(vx.data(), framesInInterval, analyzerParams);
 

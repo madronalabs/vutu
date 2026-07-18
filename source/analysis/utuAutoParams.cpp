@@ -1299,12 +1299,12 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   constexpr float kWindowToNoiseRatio = 3.4f;
   if (c.dense)
   {
-    out.params.bwRegionWidth =
+    out.params.noiseWidth =
         clampf(out.params.windowWidth / kWindowToNoiseRatio, kNoiseWidthLo, 2000.f);
   }
   else
   {
-    out.params.bwRegionWidth =
+    out.params.noiseWidth =
         clampf(4.f * out.params.resolution, std::max(kNoiseWidthLo, 250.f), 2000.f);
   }
 

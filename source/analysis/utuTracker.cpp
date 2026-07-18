@@ -2,6 +2,11 @@
 // vutu
 // Copyright (c) 2026 Madrona Labs LLC. http://www.madronalabs.com
 
+// Partial tracking: greedy nearest-frequency matching of kept peaks onto
+// growing partials, written from the behavioral spec in the header (see
+// Fitz & Fulop Sec. 8: partials follow ridges on the reassigned surface);
+// no Loris source consulted. Pinned by the sine/chirp/two-sine selftests.
+
 #include "utuTracker.h"
 
 #include <algorithm>
@@ -24,17 +29,15 @@ void PartialTracker::reset()
   _newlyEligible.clear();
 }
 
-// insert keeping breakpoints time-ordered; reassignment offsets can reach
-// ±one hop, so a breakpoint can land earlier in absolute time than its
-// predecessor from the previous frame
+// Reassignment can place a breakpoint slightly before its predecessor
+// (time offsets reach ±one hop), so insertion keeps breakpoints
+// time-ordered; the common case is a plain append.
 void PartialTracker::appendBreakpoint(BuildingPartial& p, int64_t frameSample, const Peak& pk)
 {
-  size_t pos = p.size();
   const double t = frameSample / _sampleRate + pk.timeOffset;
-  while ((pos > 0) && (p.timeAt(pos - 1, _sampleRate) > t))
-  {
-    --pos;
-  }
+  size_t pos = p.size();
+  while ((pos > 0) && (p.timeAt(pos - 1, _sampleRate) > t)) --pos;
+
   p.frameSample.insert(p.frameSample.begin() + pos, frameSample);
   p.timeOffset.insert(p.timeOffset.begin() + pos, pk.timeOffset);
   p.freq.insert(p.freq.begin() + pos, pk.freq);
@@ -46,74 +49,55 @@ void PartialTracker::appendBreakpoint(BuildingPartial& p, int64_t frameSample, c
 void PartialTracker::buildFrame(PeakFrame& frame, int64_t frameSample, float freqDriftHz)
 {
   const float drift = (freqDriftHz > 0.f) ? freqDriftHz : _freqDrift;
-  _newlyEligible.clear();
-  auto& peaks = frame.peaks;
 
-  // eligible partials are ascending in end frequency iff peaks are always
-  // consumed in ascending frequency
-  std::sort(peaks.begin(), peaks.begin() + frame.numKept,
+  std::sort(frame.peaks.begin(), frame.peaks.begin() + frame.numKept,
             [](const Peak& a, const Peak& b) { return a.freq < b.freq; });
 
-  auto endFreq = [this](size_t eligIdx) { return _partials[_eligible[eligIdx]].endFreq(); };
-  auto dist = [this](size_t eligIdx, const Peak& pk)
-  { return fabsf(_partials[_eligible[eligIdx]].endFreq() - pk.freq); };
-
-  const size_t nEligible = _eligible.size();
-  size_t eligible = 0;
+  // Two-pointer merge of ascending peak frequencies against ascending
+  // partial end frequencies. Each eligible partial takes at most one peak;
+  // a peak extends the nearest eligible partial within the drift limit
+  // unless the following (higher) peak is an even better match for it, in
+  // which case this peak starts a new partial and leaves the eligible one
+  // for its neighbor.
+  _newlyEligible.clear();
+  size_t e = 0;
+  auto endFreq = [this](size_t ei) { return _partials[_eligible[ei]].endFreq(); };
   for (size_t i = 0; i < frame.numKept; ++i)
   {
-    const Peak& pk = peaks[i];
+    const Peak& pk = frame.peaks[i];
 
-    // find the eligible partial nearest in frequency to this peak;
-    // nextEligible is the first with end frequency above the peak
-    size_t nextEligible = eligible;
-    if ((eligible < nEligible) && (endFreq(eligible) < pk.freq))
+    // partials left behind here are below every remaining peak and only
+    // recede further: they exit eligibility for good
+    while ((e + 1 < _eligible.size()) &&
+           (fabsf(endFreq(e + 1) - pk.freq) < fabsf(endFreq(e) - pk.freq)))
     {
-      ++nextEligible;
-      while ((nextEligible < nEligible) && (endFreq(nextEligible) < pk.freq))
-      {
-        ++nextEligible;
-        ++eligible;
-      }
-      if ((nextEligible < nEligible) && (dist(nextEligible, pk) < dist(eligible, pk)))
-      {
-        eligible = nextEligible;
-      }
+      ++e;
     }
 
-    // match only if within freqDrift and the next peak would not be a
-    // better match for the same partial
-    bool makeMatch = false;
-    if (eligible < nEligible)
+    bool matched = false;
+    if (e < _eligible.size())
     {
-      if (drift > fabsf(endFreq(eligible) - pk.freq))
+      const float dist = fabsf(endFreq(e) - pk.freq);
+      const bool nextPeakCloser =
+          (i + 1 < frame.numKept) &&
+          (fabsf(frame.peaks[i + 1].freq - endFreq(e)) < dist);
+      if ((dist < drift) && !nextPeakCloser)
       {
-        const bool nextIsBetter =
-            (i + 1 < frame.numKept) && (dist(eligible, peaks[i + 1]) < dist(eligible, pk));
-        if (!nextIsBetter)
-        {
-          makeMatch = true;
-        }
+        const uint32_t idx = _eligible[e];
+        appendBreakpoint(_partials[idx], frameSample, pk);
+        _newlyEligible.push_back(idx);
+        ++e;
+        matched = true;
       }
     }
-
-    uint32_t target;
-    if (makeMatch)
+    if (!matched)
     {
-      target = _eligible[eligible];
-      appendBreakpoint(_partials[target], frameSample, pk);
-    }
-    else
-    {
-      target = uint32_t(_partials.size());
-      _partials.emplace_back();
+      BuildingPartial p;
+      _partials.push_back(std::move(p));
       appendBreakpoint(_partials.back(), frameSample, pk);
+      _newlyEligible.push_back(uint32_t(_partials.size() - 1));
     }
-    _newlyEligible.push_back(target);
-
-    eligible = nextEligible;
   }
-
   std::swap(_eligible, _newlyEligible);
 }
 

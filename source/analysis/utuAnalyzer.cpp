@@ -2,125 +2,126 @@
 // vutu
 // Copyright (c) 2026 Madrona Labs LLC. http://www.madronalabs.com
 
+// The analysis pipeline shell: streams samples through the reassigned
+// spectrum, peak selection/thinning, residue bandwidth association and
+// partial tracking, one hop at a time. Written from the paper (Fitz &
+// Fulop) and the module specs; no Loris source consulted.
+
 #include "utuAnalyzer.h"
 
 #include <algorithm>
-#include <cassert>
 
 #include "utuPhaseFix.h"
 
 namespace ml::utu
 {
 
+namespace
+{
+
+// residue-collection radius over window width, ear-calibrated: residue must
+// be collected inside the consensus-clean zone (~W/2) around kept partials
+constexpr float kWindowToNoiseRatio = 3.4f;
+
+}  // namespace
+
 void PartialAnalyzer::configure(const AnalyzerParams& p)
 {
   _params = p;
-  // resolve Loris-default couplings (Analyzer::configure)
-  if (_params.windowWidth <= 0.f) _params.windowWidth = 2.f * _params.resolution;
-  if (_params.freqFloor <= 0.f) _params.freqFloor = _params.resolution;
-  if (_params.freqDrift <= 0.f) _params.freqDrift = 0.5f * _params.resolution;
-  if (_params.sidelobeLevel <= 0.f) _params.sidelobeLevel = -_params.ampFloor;
-  if (_params.hopTime <= 0.f) _params.hopTime = 1.f / _params.windowWidth;
-  if (_params.cropTime <= 0.f) _params.cropTime = _params.hopTime;
 
-  _spectrum.configure(
-      buildReassignmentWindows(_params.sampleRate, _params.windowWidth, _params.sidelobeLevel));
-  _selector.configure(_params.sampleRate, _params.cropTime);
-  if (_params.bwRegionWidth > 0.f)
+  // resolve the window-primary derivations; explicit nonzero values win
+  auto& q = _params;
+  if (q.windowWidth <= 0.f)
   {
-    // residue gated to half a hop: counted once, in the nearest frame
-    _bwAssociator.configure(_params.bwRegionWidth, _params.sampleRate, 0.5f * _params.hopTime);
+    // legacy resolution-first callers
+    q.windowWidth = (q.resolution > 0.f) ? 2.f * q.resolution : 160.f;
   }
-  _tracker.configure(_params.freqDrift, _params.sampleRate);
+  if (q.resolution <= 0.f) q.resolution = 0.5f * q.windowWidth;
+  if (q.noiseWidth <= 0.f) q.noiseWidth = q.windowWidth / kWindowToNoiseRatio;
+  if (q.freqFloor <= 0.f) q.freqFloor = q.resolution;
+  if (q.freqDrift <= 0.f) q.freqDrift = 0.5f * q.resolution;
+  if (q.sidelobeLevel <= 0.f) q.sidelobeLevel = -q.ampFloor;
+  if (q.hopTime <= 0.f) q.hopTime = 1.f / q.windowWidth;
+  if (q.cropTime <= 0.f) q.cropTime = q.hopTime;
 
-  _hopSamples = long(_params.hopTime * _params.sampleRate);  // truncated, as in Loris
-  const long winlen = _spectrum.windowLength();
-  _windowScratch.assign(winlen, 0.f);
-  _buffer.resize(int(4 * winlen));
-  _configured = true;
+  _spectrum.configure(buildReassignmentWindows(q.sampleRate, q.windowWidth, q.sidelobeLevel));
+  _selector.configure(q.sampleRate, q.cropTime);
+  // truncated: the frame grid must land on integer samples
+  _hopSamples = std::max(1L, long(q.hopTime * q.sampleRate));
+  if (q.associateNoise)
+  {
+    // residue is gated at half a hop so each residue quantum lands in the
+    // one frame nearest its reassigned time (see utuBandwidth.h)
+    _bwAssociator.configure(q.noiseWidth, q.sampleRate, 0.5f * q.hopTime);
+  }
+  _tracker.configure(q.freqDrift, q.sampleRate);
+
   reset();
+  _configured = true;
 }
 
 void PartialAnalyzer::reset()
 {
-  assert(_configured);
-  _tracker.reset();
-  _buffer.clear();
+  _history.clear();
+  _historyStart = 0;
   _frameSample = 0;
   _samplesPushed = 0;
-
-  // pre-write half a window of silence so the first frame is centered on
-  // the first input sample; zero samples here are equivalent to Loris's
-  // clipped window at the buffer edges
-  const long half = _spectrum.windowLength() / 2;
-  std::fill(_windowScratch.begin(), _windowScratch.end(), 0.f);
-  _buffer.write(_windowScratch.data(), half);
+  _tracker.reset();
 }
 
 void PartialAnalyzer::processHop()
 {
-  const long winlen = _spectrum.windowLength();
-  _buffer.readWithOverlap(_windowScratch.data(), winlen, winlen - _hopSamples);
-
-  _spectrum.transform(_windowScratch.data(), winlen, winlen / 2);
+  _spectrum.transform(_history.data(), long(_history.size()),
+                      long(_frameSample - _historyStart));
   _selector.selectPeaks(_spectrum, _params.freqFloor, _peakFrame);
-
-  const double frameTime = _frameSample / double(_params.sampleRate);
-  thinPeaks(_peakFrame, _params.resolution, _params.ampFloor, frameTime);
-  if (_params.bwRegionWidth > 0.f)
+  thinPeaks(_peakFrame, _params.resolution, _params.ampFloor,
+            _frameSample / double(_params.sampleRate));
+  if (_params.associateNoise)
   {
     _bwAssociator.associateBandwidth(_peakFrame);
   }
   _tracker.buildFrame(_peakFrame, _frameSample);
   _frameSample += _hopSamples;
+
+  // drop history no future frame reaches (window left edge of the next
+  // frame); the transform sees zeros outside the kept range anyway
+  const long half = (windowLength() - 1) / 2;
+  const int64_t needed = _frameSample - half;
+  if (needed - _historyStart > 4 * _hopSamples)
+  {
+    const long drop = long(needed - _historyStart);
+    _history.erase(_history.begin(), _history.begin() + drop);
+    _historyStart = needed;
+  }
 }
 
 void PartialAnalyzer::pushSamples(const float* src, size_t n)
 {
-  assert(_configured);
-  const size_t winlen = size_t(_spectrum.windowLength());
-  while (n > 0)
+  _history.insert(_history.end(), src, src + n);
+  _samplesPushed += n;
+
+  // a frame is ready once the window's right edge is inside the input;
+  // the first frames' left edges see leading zeros (frame 0 is centered on
+  // sample 0, as if preceded by half a window of silence)
+  const long half = (windowLength() - 1) / 2;
+  while (_frameSample + half < _samplesPushed)
   {
-    const size_t m = std::min(n, _buffer.getWriteAvailable());
-    if (m > 0)
-    {
-      _buffer.write(src, m);
-      src += m;
-      n -= m;
-      _samplesPushed += m;
-    }
-    while (_buffer.getReadAvailable() >= winlen)
-    {
-      processHop();
-    }
+    processHop();
   }
 }
 
 void PartialAnalyzer::finish()
 {
-  assert(_configured);
-  // process remaining frames with centers before the end of the input,
-  // padding silence as needed
-  const long winlen = _spectrum.windowLength();
-  std::fill(_windowScratch.begin(), _windowScratch.end(), 0.f);
+  // flush frames whose centers lie within the input; their right edges see
+  // trailing zeros
   while (_frameSample < _samplesPushed)
   {
-    while ((_buffer.getReadAvailable() < size_t(winlen)) && (_frameSample < _samplesPushed))
-    {
-      const size_t pad = std::min(size_t(winlen), _buffer.getWriteAvailable());
-      _buffer.write(_windowScratch.data(), pad);
-      std::fill(_windowScratch.begin(), _windowScratch.end(), 0.f);
-    }
-    if (_buffer.getReadAvailable() >= size_t(winlen))
-    {
-      processHop();
-    }
+    processHop();
   }
 }
 
 std::unique_ptr<VutuPartialsData> PartialAnalyzer::takePartials()
 {
-  assert(_configured);
   auto& built = _tracker.partials();
   if (_params.phaseCorrect)
   {
@@ -129,21 +130,21 @@ std::unique_ptr<VutuPartialsData> PartialAnalyzer::takePartials()
 
   auto out = std::make_unique<VutuPartialsData>();
   out->partials.reserve(built.size());
-  const double sr = _params.sampleRate;
-  for (const BuildingPartial& bp : built)
+  for (const BuildingPartial& b : built)
   {
-    VutuPartial vp;
-    const size_t n = bp.size();
-    vp.time.resize(n);
+    if (b.size() == 0) continue;
+    VutuPartial p;
+    const size_t n = b.size();
+    p.time.reserve(n);
     for (size_t i = 0; i < n; ++i)
     {
-      vp.time[i] = float(bp.timeAt(i, sr));
+      p.time.push_back(float(b.timeAt(i, _params.sampleRate)));
     }
-    vp.freq = bp.freq;
-    vp.amp = bp.amp;
-    vp.bandwidth = bp.bw;
-    vp.phase = bp.phase;
-    out->partials.push_back(std::move(vp));
+    p.freq = b.freq;
+    p.amp = b.amp;
+    p.bandwidth = b.bw;
+    p.phase = b.phase;
+    out->partials.push_back(std::move(p));
   }
 
   out->resolution = _params.resolution;
@@ -152,7 +153,6 @@ std::unique_ptr<VutuPartialsData> PartialAnalyzer::takePartials()
   out->freqDrift = _params.freqDrift;
   out->loCut = _params.freqFloor;
 
-  _tracker.reset();
   reset();
   return out;
 }

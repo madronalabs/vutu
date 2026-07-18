@@ -168,13 +168,13 @@ std::vector<float> makeSine(double freq, float amp, double seconds, double sr)
 // post-processing (cleanOutliers, stats)
 std::unique_ptr<ml::VutuPartialsData> analyzeSimple(const std::vector<float>& x, double sr,
                                                     float windowWidth,
-                                                    float bwRegionWidth = 2000.f)
+                                                    float noiseWidth = 2000.f)
 {
   ml::utu::AnalyzerParams p;
   p.sampleRate = float(sr);
   p.windowWidth = windowWidth;
   p.resolution = windowWidth * 0.5f;
-  p.bwRegionWidth = bwRegionWidth;
+  p.noiseWidth = noiseWidth;
   auto partials = ml::utu::analyzeToPartials(x.data(), x.size(), p);
   ml::cleanOutliers(*partials);
   if (!partials->partials.empty()) ml::calcStats(*partials);
@@ -1017,7 +1017,7 @@ void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
           r.params.freqDrift);
   fprintf(f, "  loCut        %8.1f Hz      hiCut       %8.1f Hz\n", r.params.freqFloor,
           r.hiCut);
-  fprintf(f, "  noiseWidth   %8.1f Hz      sidelobe    %8.1f dB\n", r.params.bwRegionWidth,
+  fprintf(f, "  noiseWidth   %8.1f Hz      sidelobe    %8.1f dB\n", r.params.noiseWidth,
           r.params.sidelobeLevel);
   fprintf(f, "  fundamental  %8.1f Hz      confidence  %8.2f\n", r.fundamental,
           r.pitchConfidence);
@@ -1076,7 +1076,7 @@ int autoTest(const char* path)
   inRange(r.params.freqDrift, 2, 80, "freqDrift");
   inRange(r.params.freqFloor, 20, 2000, "loCut");
   inRange(r.hiCut, 200, 20000, "hiCut");
-  inRange(r.params.bwRegionWidth, 10, 5000, "noiseWidth");
+  inRange(r.params.noiseWidth, 10, 5000, "noiseWidth");
 
   // the walk must land at or under the target, and must terminate for one
   // of the two legitimate reasons
@@ -1207,7 +1207,7 @@ int tuneCmd(const char* path, int budget)
   auto gDrift = [](ml::utu::AnalyzerParams& a) { return &a.freqDrift; };
   auto gRes = [](ml::utu::AnalyzerParams& a) { return &a.resolution; };
   auto gFloor = [](ml::utu::AnalyzerParams& a) { return &a.ampFloor; };
-  auto gNoise = [](ml::utu::AnalyzerParams& a) { return &a.bwRegionWidth; };
+  auto gNoise = [](ml::utu::AnalyzerParams& a) { return &a.noiseWidth; };
   Knob knobs[] = {
       {"windowWidth", 16.f, 768.f, true, 1.3f, gWidth},
       {"freqDrift", 2.f, 80.f, true, 2.f, gDrift},
