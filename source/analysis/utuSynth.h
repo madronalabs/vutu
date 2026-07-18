@@ -18,23 +18,21 @@ struct SynthParams
   float fadeTime{0.001f};  // seconds of onset/offset fade added around partials
 };
 
-// Bandwidth-enhanced sinusoidal synthesizer replacing Loris::Synthesizer.
+// Bandwidth-enhanced sinusoidal synthesizer.
 //
 // Each partial is turned into a schedule of linear segments with
-// sample-quantized boundaries and a start phase precomputed (in double, at
-// schedule build) by Loris's rules: phase is anchored to the stored
-// breakpoint phase wherever the amplitude leaves zero, and evolves by
-// midpoint-frequency integration elsewhere. Rendering is then block-based:
-// per 64-sample block, per 4-voice group, signal-rate freq/amp/bandwidth
-// rows drive a bank of accurate sine generators (madronalib TestSineGen)
-// whose phases are re-anchored analytically every block, with a
-// noise-through-lowpass modulator supplying the bandwidth component:
-//   out += amp · (sqrt(1-bw) + nz·sqrt(2·bw)) · sin(phase)
+// sample-quantized boundaries (stored phases corrected for the
+// quantization shift) wrapped in fadeTime onset/offset ramps. The
+// oscillator integrates frequency per sample in double — arrival phase per
+// segment is the π(f0+f1)·dt travel the phase-fix pass reconciled — and
+// snaps to the stored breakpoint phase wherever amplitude leaves zero: the
+// phase-correct rendering discipline of Fitz & Fulop Sec. 8. A
+// noise-through-lowpass modulator supplies the bandwidth component:
+//   out += amp · (sqrt(1-bw) + nz·sqrt(2·bw)) · cos(phase)
 //
-// The noise modulator deviates from Loris (uniform noise through an SVF
-// lowpass instead of Gaussian through a 3rd-order Chebyshev), gain-matched
-// to the same modulation energy; the audible result is validated by
-// listening.
+// The noise modulator is uniform noise through two lowpass SVFs,
+// gain-matched to the model's modulation energy; the audible result is
+// validated by listening.
 class PartialSynthesizer
 {
  public:

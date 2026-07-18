@@ -12,11 +12,11 @@ namespace ml::utu
 // wrap an unwrapped phase to [-pi, pi] (O'Donnell)
 double wrapPi(double x);
 
-// Port of Loris phasefix fixFrequency/matchPhaseFwd: walk each partial
-// adjusting breakpoint frequencies (by at most maxFixPct percent, correcting
-// half the error per step) so that rendered phase travel matches the
-// analyzed phases, then recompute the stored phases to be consistent.
-// Breakpoint time differences come from the exact sample-domain times.
+// Frequency/phase reconciliation: walk each partial adjusting breakpoint
+// frequencies (by at most maxFixPct percent, correcting half the error per
+// step) so that rendered phase travel matches the analyzed phases, then
+// recompute the stored phases to be consistent. Breakpoint time differences
+// come from the exact sample-domain times.
 //
 // This is the reconciliation step of phase-correct additive modeling (Fitz &
 // Fulop Sec. 8): breakpoint frequencies and phases are estimated
