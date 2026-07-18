@@ -37,17 +37,28 @@ struct AutoAnalyzerParams
                                   // false: every quality ladder was exhausted
   float activeDuration{0.f};      // seconds of non-silent material measured
 
-  // window-decision diagnostics: when the tonal band envelopes carry
-  // audibly-loud fast modulation, temporal stability drives the window —
-  // wide enough (short enough in time) to merge the modulation cluster and
-  // track it as amplitude envelopes — and resolution follows as half the
-  // main lobe. Otherwise frequency spacing drives the window.
+  // window-decision diagnostics. The window is found by a coherence
+  // search: probe a ladder of widths from wide to narrow and take the
+  // widest whose point measurements form connected partials (see
+  // chooseWindow in the .cpp). searchW/searchLinked record the measured
+  // ladder; searchChosen indexes the winner (-1: noise fallback).
+  static constexpr int kMaxSearchSteps = 8;
+  enum SearchMode { kSearchKnee, kSearchFlatWidest, kSearchFlatMod, kSearchNoiseFallback };
+  int searchMode{kSearchNoiseFallback};
+  int searchSteps{0};
+  int searchChosen{-1};  // ladder index when searchMode == kSearchKnee
+  float searchW[kMaxSearchSteps]{};       // ladder widths probed, Hz
+  float searchLinked[kMaxSearchSteps]{};  // linked fraction of counted points
+  float searchRate[kMaxSearchSteps]{};    // coherent points per frame (the
+                                          // decision statistic; knee rule)
+
+  // beat statistics (diagnostics; the mod gate now selects only the
+  // noiseWidth rule)
   bool modDriven{false};
   float beatIndexDb{-120.f};  // absolute beat-band modulation index of the
                               // tonal band envelopes, dB
-  float beatFraction{0.f};    // beat-band share of all modulation (diagnostic)
+  float beatFraction{0.f};    // beat-band share of all modulation
   float beatRateHz{0.f};      // p90 beat rate
-  float wDemandHz{0.f};       // beatRate90/0.3, the pre-clamp window demand
 };
 
 // Estimate analysis parameters likely to produce a faithful reconstruction

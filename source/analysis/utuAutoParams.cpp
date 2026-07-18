@@ -134,8 +134,10 @@ struct Ctx
   bool pitched{false}, unpitched{false};
 
   // window decision (chooseWindow)
-  bool modDriven{false};  // audibly-loud fast modulation: window chosen first
-  float wDemand{0};       // Hz, beatRate90/0.3 — pre-clamp window demand
+  bool modDriven{false};   // loud fast modulation: selects the tight noise rule
+  bool resFrozen{true};    // resolution = W/2 invariant holds (search-chosen W);
+                           // false only on the noise fallback, where the walk
+                           // may spend budget by refining resolution
 };
 
 // ---------------------------------------------------------------------------
@@ -815,43 +817,14 @@ void stage2(Ctx& c)
 }
 
 // ---------------------------------------------------------------------------
-// stage 3: the window decision.
-//
-// A component pair at spacing d has three fates under a window of main-lobe
-// width W: merged (d < 0.3·W, its beat is tracked as an amplitude envelope
-// — correct), resolved (d > 0.5·W, two partials — correct), or the
-// partially-resolved bad zone in between, where unstable candidates get
-// masked or rejected frame by frame and their energy is misclassified as
-// noise.
-//
-// The window floor comes from temporal stability, not frequency spacing:
-// when the tonal band envelopes carry audibly-loud fast modulation
-// (beating decays, chords, vocal roughness), the analysis must merge that
-// modulation cluster and track it as amplitude envelopes — W >= rate/0.3 —
-// with the frame rate (= W) keeping up. Spacing statistics cannot see this
-// need: sub-resolution pairs merge in the averaged spectrum, and a share-
-// of-modulation gate hides a vocal's real fast roughness behind its louder
-// slow vibrato (the old beatFraction gate discarded exactly the sounds
-// that needed the wide window — huygens measured index +12.9 dB, fraction
-// 0.03). Only when no such modulation is measured does spacing set the
-// window.
-//
-// Ear calibration (2026-07-18, huygens / gambang2 / cello / 1977):
-//   kModIndexGateDb  +5   between cello -4.5 dB (spacing window correct by
-//                         ear) and huygens +12.9 dB (needs the mod window)
-//   kModRateGateHz   30   rejects the DC skirt of decay envelopes leaking
-//                         into the bottom modulation bins (@bell pins at
-//                         15.2 Hz, the band edge)
-//   kWModLo         150   below, complex sounds smear toward a primitive-
-//                         PSOLA time-stretch quality (1977 sweep)
-//   kWModHi         300   above, partials never find stability and the
-//                         render goes watery (1977's auto 649 was clearly
-//                         too high); every ear optimum so far is 150-305
+// stage 3: the window decision — a coherence search (defined after the
+// probe machinery it drives; see chooseWindow below).
 
-constexpr float kModIndexGateDb = 5.f;
-constexpr float kModRateGateHz = 30.f;
-constexpr float kWModLo = 150.f;
-constexpr float kWModHi = 300.f;
+// the mod gate: audibly-loud fast envelope modulation. It no longer sizes
+// the window (the coherence search does, closed-loop); it selects the
+// noiseWidth rule — noisy/beating material wants tight residue regions
+constexpr float kModIndexGateDb = 5.f;  // cello -4.5 dB (steady) vs huygens +12.9
+constexpr float kModRateGateHz = 30.f;  // rejects decay-envelope DC skirts
 
 // at least ~3 window lengths within the sound (window length ≈ 8/W s)
 float windowFloor(const Ctx& c)
@@ -859,45 +832,11 @@ float windowFloor(const Ctx& c)
   return std::max(kWidthLo, float(24. / std::max(0.05, c.activeDuration)));
 }
 
-// resolution moves (quality walk, unpitched material only) keep W = 2·res
+// resolution moves (quality walk, noise-fallback material only) keep W = 2·res
 void applyResolution(const Ctx& c, AnalyzerParams& p, float resolution)
 {
   p.resolution = clampf(resolution, kResolutionLo, kResolutionHi);
   p.windowWidth = clampf(std::max(2.f * p.resolution, windowFloor(c)), kWidthLo, kWidthHi);
-}
-
-void chooseWindow(Ctx& c, AnalyzerParams& p)
-{
-  c.modDriven = (c.beatIndexDb > kModIndexGateDb) && (c.beatRate90 > kModRateGateHz);
-  if (c.modDriven)
-  {
-    // temporal stability drives the window; resolution follows as half the
-    // main lobe so everything the window resolves is kept — nothing
-    // partially-resolved survives to be masked into noise. Budget pressure
-    // is handled by the quality walk's amplitude floor
-    c.wDemand = c.beatRate90 / 0.3f;
-    const float w = clampf(std::max(clampf(c.wDemand, kWModLo, kWModHi), windowFloor(c)),
-                           kWidthLo, kWidthHi);
-    p.windowWidth = w;
-    p.resolution = clampf(0.5f * w, kResolutionLo, kResolutionHi);
-  }
-  else if (c.unpitched)
-  {
-    // spread the partial budget across the occupied band: kept-peak density
-    // after ±resolution masking is about one track per 1.25·resolution
-    const float band = std::max(200.f, c.hiCut - c.loCut);
-    applyResolution(c, p, band / (0.8f * c.budget));
-  }
-  else
-  {
-    // 0.8: the masking radius must sit below the smallest real spacing,
-    // with headroom for inharmonic stretch and vibrato excursion
-    applyResolution(c, p, 0.8f * c.spacingMin);
-  }
-  p.freqFloor = c.loCut;
-  p.ampFloor = c.ampFloorV1;
-  p.sidelobeLevel = 90.f;  // never coupled to ampFloor: budget-driven floor
-                           // raises must not degrade sidelobe rejection
 }
 
 // ---------------------------------------------------------------------------
@@ -907,12 +846,33 @@ void chooseWindow(Ctx& c, AnalyzerParams& p)
 struct ProbePeakData
 {
   float freq, amp;
+  int chain{1};  // consecutive frames this peak has stayed within the tight
+                 // coherence radius (window-search statistic)
 };
 
 struct ProbeData
 {
   std::vector<std::vector<ProbePeakData>> frames;  // kept peaks per frame, freq-ascending
   std::vector<float> hopDeltas;                    // |Δf| of strong peaks matched hop-to-hop
+
+  // coherence statistic over peaks above the working floor: how much of
+  // the measured spectral energy structure forms connected partials
+  long totalPoints{0};    // counted point measurements
+  long linkedPoints{0};   // of those, points in chains of >= 3 frames
+  long framesProbed{0};   // frames the counts were taken over
+  float linkedFraction() const
+  {
+    return totalPoints ? float(linkedPoints) / float(totalPoints) : 0.f;
+  }
+  // absolute rate: coherent points per frame. The window search keys on
+  // this, not the fraction — at too-wide W, content inside the masking
+  // radius is thinned away entirely, so the survivors still *look*
+  // coherent; what a narrower window recovers appears as additional
+  // coherent points, and the fraction alone cannot see them
+  float linkedPerFrame() const
+  {
+    return framesProbed ? float(linkedPoints) / float(framesProbed) : 0.f;
+  }
 };
 
 // One probe pass at the given resolution/window, taken at the most
@@ -929,7 +889,16 @@ struct ProbeData
 // so counting them makes the probe overestimate the achieved simultaneous
 // count and the quality walk over-raises the amplitude floor. (Measured on
 // a dense mix: raw probe p90 57 vs 23 partials actually achieved.)
-ProbeData probeFrames(const Ctx& c, const AnalyzerParams& p)
+// The coherence statistic rides along: peaks above the *working* floor
+// (ampFloorV1, inside [loCut, hiCut]) are additionally matched at a tight
+// radius of 0.1·resolution = 0.05·W. The persistence radius (0.5·res)
+// deliberately tolerates track motion for budget counting; the coherence
+// radius must not — a partially-resolved pair's candidate wobbles by
+// ±spacing/2 per beat and has to read as disconnected, while legitimate
+// motion stays linked (5 Hz vibrato of ±10 Hz on 220 Hz moves ~1.6 Hz per
+// hop; a 1 kHz/s chirp ~5 Hz — the radius at W 200 is 10 Hz). A point
+// counts as linked once its chain spans 3 or more frames.
+ProbeData probeFrames(const Ctx& c, const AnalyzerParams& p, int framesPerSite = 5)
 {
   ProbeData d;
   ReassignedSpectrum spectrum;
@@ -940,13 +909,15 @@ ProbeData probeFrames(const Ctx& c, const AnalyzerParams& p)
 
   const float permissiveFloor = -100.f;
   const float strongAmp = powf(10.f, (c.ampFloorV1 + 20.f) / 20.f);
-  const int framesPerSite = 5;
+  const float countedAmp = powf(10.f, c.ampFloorV1 / 20.f);
+  const float linkRadius = 0.1f * p.resolution;
 
   PeakFrame frame;
-  std::vector<ProbePeakData> prev;
+  std::vector<ProbePeakData> prev, prevCounted;
   for (size_t site : c.probeSites)
   {
     prev.clear();
+    prevCounted.clear();
     for (int j = 0; j < framesPerSite; ++j)
     {
       const long center = long(site) + j * hopSamples;
@@ -991,6 +962,40 @@ ProbeData probeFrames(const Ctx& c, const AnalyzerParams& p)
         }
         d.frames.push_back(std::move(persistent));
       }
+
+      // coherence chains over the counted (working-floor) peaks
+      ++d.framesProbed;
+      std::vector<ProbePeakData> counted;
+      counted.reserve(kept.size());
+      for (const auto& pk : kept)
+      {
+        if ((pk.amp >= countedAmp) && (pk.freq >= c.loCut) && (pk.freq <= c.hiCut))
+        {
+          counted.push_back(pk);
+        }
+      }
+      d.totalPoints += long(counted.size());
+      {
+        size_t a = 0, b = 0;
+        while (a < prevCounted.size() && b < counted.size())
+        {
+          const float df = counted[b].freq - prevCounted[a].freq;
+          if (fabsf(df) < linkRadius)
+          {
+            counted[b].chain = prevCounted[a].chain + 1;
+            // credit the whole chain once it proves out, then each new link
+            if (counted[b].chain == 3) d.linkedPoints += 3;
+            else if (counted[b].chain > 3) d.linkedPoints += 1;
+            ++a;
+            ++b;
+          }
+          else if (df > 0)
+            ++a;
+          else
+            ++b;
+        }
+      }
+      prevCounted = std::move(counted);
       prev = std::move(kept);
     }
   }
@@ -1017,6 +1022,135 @@ int countP90(const ProbeData& d, float floorDb, float lo, float hi)
   return int(percentile(std::move(counts), 0.9f));
 }
 
+// The window decision: a coherence search over a ladder of widths, wide to
+// narrow — the closed-loop form of the manual method that finds good
+// windows by ear. At too-wide W, real spacings land in the 0.3-0.5·W
+// partially-resolved zone (their candidates wobble between the component
+// frequencies — the f/2f "bloopy" artifact), noise stays incoherent, and
+// point measurements refuse to form chains. As W comes down, more of the
+// measured points join connected partials. The search takes the widest W
+// whose linked fraction clears the bar, so frame rate stays as high as the
+// material's coherence allows. One measured statistic subsumes the old
+// open-loop rules: spacing ceilings (a bad-zone spacing reads as
+// incoherence), noise inflation of the beat statistic, and modulation
+// stability all show up in it directly.
+//
+// The decision uses the whole measured curve of coherent points per frame:
+// the widest W achieving at least kKneeFraction of the curve's maximum.
+// Descending past the knee buys almost no additional coherent content and
+// only costs frame rate; stopping above it leaves real components masked.
+// kKneeFraction is ear-calibrated (see the report's ladder printout):
+// chosen Ws must land in the known-good ranges {huygens 170-205, gambang2
+// 130-170, 1977 130-170, cello ~170-200}. Material where nothing links
+// (max linked fraction < kNoiseCoherence) is noise-like: fall back to
+// spreading the partial budget across the occupied band.
+constexpr float kKneeFraction = 0.85f;  // (cal)
+constexpr float kNoiseCoherence = 0.1f;
+constexpr float kSearchLadder[] = {350.f, 292.f, 243.f, 203.f, 169.f, 141.f, 117.f};
+constexpr int kSearchFramesPerSite = 8;
+
+// A flat rate curve (max/min below kFlatRatio) means coherence cannot
+// decide: nothing unmasks anywhere on the ladder. Measured: huygens
+// 8.2/6.7 = 1.22 (flat — breathy vocal partials link at every W), vs
+// cello 2.5, 1977 1.86, gambang2 1.47 (kneed). When flat and the mod gate
+// is on, the material still needs frame rate for its loud fast
+// modulation, and the round-2 demand rule was right for exactly this case
+// (huygens: 61.5/0.3 = 205, the ear answer); flat without the gate is
+// steady coherent-everywhere material that simply wants the widest window
+// (@sine). Bounds 150/300 from the 1977 ear sweep.
+constexpr float kFlatRatio = 1.3f;
+constexpr float kFlatModLo = 150.f;
+constexpr float kFlatModHi = 300.f;
+
+void chooseWindow(Ctx& c, AnalyzerParams& p, AutoAnalyzerParams& out, ProbeData& probeOut)
+{
+  c.modDriven = (c.beatIndexDb > kModIndexGateDb) && (c.beatRate90 > kModRateGateHz);
+  const float wFloor = windowFloor(c);
+
+  float rate[AutoAnalyzerParams::kMaxSearchSteps];
+  float maxRate = 0.f, maxFrac = 0.f;
+  float minRate = 1e9f;
+  for (float w : kSearchLadder)
+  {
+    if (w < wFloor) break;  // shorter sounds stop the descent early
+    if (out.searchSteps >= AutoAnalyzerParams::kMaxSearchSteps) break;
+    AnalyzerParams trial;
+    trial.sampleRate = float(c.sr);
+    trial.windowWidth = w;
+    trial.resolution = 0.5f * w;
+    trial.sidelobeLevel = 90.f;
+    const ProbeData probe = probeFrames(c, trial, kSearchFramesPerSite);
+    const int i = out.searchSteps;
+    rate[i] = probe.linkedPerFrame();
+    out.searchW[i] = w;
+    out.searchLinked[i] = probe.linkedFraction();
+    out.searchRate[i] = rate[i];
+    ++out.searchSteps;
+    maxRate = std::max(maxRate, rate[i]);
+    minRate = std::min(minRate, rate[i]);
+    maxFrac = std::max(maxFrac, probe.linkedFraction());
+  }
+
+  float chosenW = 0.f;
+  int chosen = -1;
+  if ((out.searchSteps > 0) && (maxFrac >= kNoiseCoherence))
+  {
+    if (maxRate < kFlatRatio * std::max(minRate, 1e-6f))
+    {
+      // flat curve: coherence cannot decide. Loud fast modulation still
+      // demands frame rate; otherwise the widest window is free
+      if (c.modDriven)
+      {
+        chosenW = clampf(c.beatRate90 / 0.3f, kFlatModLo, kFlatModHi);
+        out.searchMode = AutoAnalyzerParams::kSearchFlatMod;
+      }
+      else
+      {
+        chosenW = out.searchW[0];
+        out.searchMode = AutoAnalyzerParams::kSearchFlatWidest;
+      }
+    }
+    else
+    {
+      for (int i = 0; i < out.searchSteps; ++i)
+      {
+        if (rate[i] >= kKneeFraction * maxRate)
+        {
+          chosen = i;
+          chosenW = out.searchW[i];
+          out.searchMode = AutoAnalyzerParams::kSearchKnee;
+          break;
+        }
+      }
+    }
+  }
+  out.searchChosen = chosen;
+
+  if (chosenW > 0.f)
+  {
+    const float w = clampf(std::max(chosenW, wFloor), kWidthLo, kWidthHi);
+    p.windowWidth = w;
+    p.resolution = clampf(0.5f * w, kResolutionLo, kResolutionHi);
+    c.resFrozen = true;
+  }
+  else
+  {
+    // noise-like: spread the partial budget across the occupied band
+    // (kept-peak density after ±resolution masking is about one track per
+    // 1.25·resolution); the quality walk may refine resolution further
+    const float band = std::max(200.f, c.hiCut - c.loCut);
+    applyResolution(c, p, band / (0.8f * c.budget));
+    c.resFrozen = false;
+  }
+  p.freqFloor = c.loCut;
+  p.ampFloor = c.ampFloorV1;
+  p.sidelobeLevel = 90.f;  // never coupled to ampFloor: budget-driven floor
+                           // raises must not degrade sidelobe rejection
+
+  // the walk's probe, at the final geometry
+  probeOut = probeFrames(c, p, kSearchFramesPerSite);
+}
+
 // The quality walk. Each budget-coupled parameter has a ladder of steps in
 // perceptual units (1/3 octave for the cuts, 6 dB for the floor, ×0.8 for
 // unpitched resolution), starting from the conservative stage 1-3
@@ -1026,13 +1160,13 @@ int countP90(const ProbeData& d, float floorDb, float lo, float hi)
 // the budget is reverted and its knob frozen while the others continue.
 // Over budget at the start: the same ladders walk down, floor first
 // (rejected quiet peaks become bandwidth, which is energy-preserving).
-void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& out)
+void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& out,
+                 ProbeData probe)
 {
   const int target = std::max(8, c.budget - 8);  // tracker spawn/decay headroom
   const float kThirdOctave = 1.259921f;          // 2^(1/3)
   const float hiCutMax = std::min(kHiCutHi, float(0.45 * c.sr));
 
-  ProbeData probe = probeFrames(c, p);
   int cnt = countP90(probe, p.ampFloor, p.freqFloor, hiCut);
   bool budgetLimited = false;
 
@@ -1056,7 +1190,7 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
         hiCut /= kThirdOctave;
         changed = true;
       }
-      else if (c.unpitched && !c.modDriven && (p.resolution * 1.25f <= kResolutionHi))
+      else if (!c.resFrozen && (p.resolution * 1.25f <= kResolutionHi))
       {
         applyResolution(c, p, p.resolution * 1.25f);
         probe = probeFrames(c, p);
@@ -1071,9 +1205,8 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
   // moved simply re-freezes on its first ascent attempt)
   {
     // knob order: hiCut up, ampFloor down, loCut down, resolution down
-    // (unpitched only — finer-than-spacing resolution on pitched material
-    // recreates the unstable-frequency pathology, and mod-driven material
-    // must keep resolution = W/2, the merge-clean invariant)
+    // (noise-fallback material only — a search-chosen window must keep
+    // resolution = W/2, the merge-clean invariant)
     enum
     {
       kKnobHiCut,
@@ -1082,7 +1215,7 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
       kKnobRes,
       kNumKnobs
     };
-    bool frozen[kNumKnobs] = {false, false, false, !c.unpitched || c.modDriven};
+    bool frozen[kNumKnobs] = {false, false, false, c.resFrozen};
     const float resMin = std::max(kResolutionLo, 0.5f * windowFloor(c));
 
     while (!(frozen[kKnobHiCut] && frozen[kKnobFloor] && frozen[kKnobLoCut] && frozen[kKnobRes]))
@@ -1159,20 +1292,24 @@ void walkQuality(Ctx& c, AnalyzerParams& p, float& hiCut, AutoAnalyzerParams& ou
     }
   }
 
-  // freqDrift: pass the movement real tracks exhibit at the final hop, but
-  // stay under half the resolution so a track cannot capture its neighbor.
+  // freqDrift: pass the movement real tracks exhibit at the final hop.
   // 3x the measured p95: crossing and interfering tracks censor the
-  // hop-delta statistic, so the raw estimate reads low — both tune runs
-  // that improved by ear landed at ~2x the old 1.5x rule (gambang2
-  // 2.3 -> 4.6; the same lesson was recorded on the Careless polyphony)
+  // hop-delta statistic, so the raw estimate reads low. Bounds are
+  // self-similar in the window ([0.12, 0.25]·W = [0.24, 0.5]·resolution):
+  // the ceiling keeps a track from capturing its neighbor and stops the
+  // f/2f flips a runaway drift enables (1977's old 70 Hz); the floor keeps
+  // beating material trackable (gambang2's starved 7.7). At the W ~165
+  // these sounds search to, the bounds are ~[20, 41] — the ear-good range
   if (!probe.hopDeltas.empty())
   {
     const float p95 = percentile(probe.hopDeltas, 0.95f);
-    p.freqDrift = clampf(3.f * p95, 3.f, std::min(kDriftHi, 0.5f * p.resolution));
+    p.freqDrift = clampf(3.f * p95, 0.12f * p.windowWidth,
+                         std::min(kDriftHi, 0.25f * p.windowWidth));
   }
   else
   {
-    p.freqDrift = clampf(0.2f * p.resolution, 3.f, std::min(kDriftHi, 0.5f * p.resolution));
+    p.freqDrift = clampf(0.18f * p.windowWidth, 0.12f * p.windowWidth,
+                         std::min(kDriftHi, 0.25f * p.windowWidth));
   }
 
   out.probedSimultaneousP90 = cnt;
@@ -1209,10 +1346,11 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   stage1(c);
   stage2(c);
   stage1b(c);  // after stage 2: the beat band is capped by the spacing
-  chooseWindow(c, out.params);
+  ProbeData probe;
+  chooseWindow(c, out.params, out, probe);
   out.hiCut = c.hiCut;
   out.budget = c.budget;
-  walkQuality(c, out.params, out.hiCut, out);
+  walkQuality(c, out.params, out.hiCut, out, std::move(probe));
 
   // noise regions. Mod-driven: the reassigned spectrum is clean of
   // candidates out to about half the main lobe around each kept partial
@@ -1255,7 +1393,6 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   out.beatIndexDb = c.beatIndexDb;
   out.beatFraction = c.beatFraction;
   out.beatRateHz = c.beatRate90;
-  out.wDemandHz = c.wDemand;
   const long hopSamples = std::max(1L, long(c.sr / out.params.windowWidth));
   out.frameRateHz = float(c.sr / hopSamples);
   out.activeDuration = float(c.activeDuration);

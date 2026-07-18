@@ -1025,16 +1025,17 @@ void printAutoParams(FILE* f, const ml::utu::AutoAnalyzerParams& r)
           r.minSpacingHz);
   fprintf(f, "  noise floor  %8.1f dB      active dur  %8.2f s\n", r.noiseFloorDb,
           r.activeDuration);
-  if (r.modDriven)
+  fprintf(f, "  window search (W:linked/frame,frac):");
+  for (int i = 0; i < r.searchSteps; ++i)
   {
-    fprintf(f, "  window: mod-driven (index %.1f dB, rate90 %.1f Hz, demand %.1f -> W %.1f)\n",
-            r.beatIndexDb, r.beatRateHz, r.wDemandHz, r.params.windowWidth);
+    fprintf(f, " %.0f:%.1f,%.2f%s", r.searchW[i], r.searchRate[i], r.searchLinked[i],
+            (i == r.searchChosen) ? "*" : "");
   }
-  else
-  {
-    fprintf(f, "  window: spacing-driven (index %.1f dB, rate90 %.1f Hz, fraction %.2f)\n",
-            r.beatIndexDb, r.beatRateHz, r.beatFraction);
-  }
+  static const char* kModeNames[] = {"knee", "flat -> widest", "flat -> mod demand",
+                                     "noise fallback"};
+  fprintf(f, "  [%s]\n", kModeNames[r.searchMode]);
+  fprintf(f, "  beat: index %.1f dB, rate90 %.1f Hz, fraction %.2f (%s noise regions)\n",
+          r.beatIndexDb, r.beatRateHz, r.beatFraction, r.modDriven ? "tight" : "wide");
   fprintf(f, "  budget use   %d/%d (p90, %s)\n", r.probedSimultaneousP90, r.budget,
           r.budgetLimited ? "budget-limited" : "ladders exhausted");
 }
