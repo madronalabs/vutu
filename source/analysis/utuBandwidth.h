@@ -11,7 +11,7 @@
 namespace ml::utu
 {
 
-// Port of Loris AssociateBandwidth, the noise half of the reassigned
+// Residue bandwidth association, the noise half of the reassigned
 // bandwidth-enhanced additive model (Fitz & Haken; Fitz & Fulop Sec. 8):
 // residue spectral energy — energy in rejected peaks — is collected into
 // overlapping frequency regions and redistributed to the kept peaks as noise
@@ -29,7 +29,7 @@ class AssociateBandwidth
   // deposits noise into every frame its window touches — a window length of
   // smeared, over-counted rustle. With the gate at half a hop, each residue
   // quantum is counted once, in the frame nearest its true time: the same
-  // reassignment principle the sinusoids get. 0 reproduces Loris exactly.
+  // reassignment principle the sinusoids get. 0 disables the gate.
   void configure(float regionWidthHz, float sampleRate, float maxResidueOffsetSec = 0.f);
 
   // associate residue energy in frame.peaks[numKept..) with the kept peaks,
@@ -42,10 +42,11 @@ class AssociateBandwidth
   std::vector<double> _weights;  // per-region amplitude weights
   std::vector<double> _surplus;  // per-region residue energy
   double _regionRate{0.};        // regions per Hz
-  float _maxResidueOffset{0.f};  // seconds; 0 = no gating (Loris behavior)
+  float _maxResidueOffset{0.f};  // seconds; 0 = no gating
 };
 
-// Loris Breakpoint::addNoiseEnergy on a Peak with bandwidth already set
+// energy-preserving noise deposit on a Peak with bandwidth already set:
+// amp² keeps total energy, bw keeps its noise fraction
 void addNoiseEnergy(Peak& pk, double enoise);
 
 }  // namespace ml::utu

@@ -2,57 +2,35 @@
 // vutu
 // Copyright (c) 2026 Madrona Labs LLC. http://www.madronalabs.com
 
+// Residue bandwidth association — the noise half of the bandwidth-enhanced
+// additive model (Fitz & Haken; Fitz & Fulop Sec. 8) — written from the
+// behavioral spec in the header; no Loris source consulted. The gate and
+// energy-update identities are pinned by the residue-gate selftest:
+// association with the time gate equals ungated association over only the
+// in-gate residue, region deposits are additive, and bw·amp'² recovers the
+// collected noise energy exactly.
+
 #include "utuBandwidth.h"
 
-#include <algorithm>
-#include <cassert>
 #include <cmath>
 
 namespace ml::utu
 {
 
-// The region accumulators are double: a frame's residue sums span many
-// orders of magnitude and the extra precision is free at this count.
-
 namespace
 {
 
-// index of the last region with center at or below the fractional region
-// frequency, or -1
-int findRegionBelow(double binFreq, size_t howManyBins)
-{
-  if (binFreq < 0.)
-  {
-    return -1;
-  }
-  return int(std::min(std::floor(binFreq), howManyBins - 1.));
-}
+// the two lowest regions sit against DC, where windowed near-silence piles
+// up junk energy no partial should inherit as noise
+constexpr long kLowestRegion = 2;
 
-// relative contribution of a component at fractional region frequency
-// binFreq to the regions above and below it; everything above the highest
-// region center is lumped into that region
-double computeAlpha(double binFreq, size_t howManyBins)
+// linear split of a value between the two regions straddling pos
+void distribute(std::vector<double>& dst, double pos, double value)
 {
-  if (binFreq > howManyBins)
-  {
-    return 0.;
-  }
-  return binFreq - std::floor(binFreq);
-}
-
-void distribute(double fractionalBin, double x, std::vector<double>& regions)
-{
-  const int posBelow = findRegionBelow(fractionalBin, regions.size());
-  const int posAbove = posBelow + 1;
-  const double alpha = computeAlpha(fractionalBin, regions.size());
-  if (posAbove < int(regions.size()))
-  {
-    regions[posAbove] += alpha * x;
-  }
-  if (posBelow >= 0)
-  {
-    regions[posBelow] += (1. - alpha) * x;
-  }
+  const long lo = long(pos);
+  const double a = pos - lo;
+  if ((lo >= 0) && (lo < long(dst.size()))) dst[lo] += (1. - a) * value;
+  if ((lo + 1 >= 0) && (lo + 1 < long(dst.size()))) dst[lo + 1] += a * value;
 }
 
 }  // namespace
@@ -60,99 +38,80 @@ void distribute(double fractionalBin, double x, std::vector<double>& regions)
 void AssociateBandwidth::configure(float regionWidthHz, float sampleRate,
                                    float maxResidueOffsetSec)
 {
-  assert(regionWidthHz > 0.f && sampleRate > 0.f);
-  const size_t numRegions = size_t(sampleRate / regionWidthHz);
+  _regionRate = 2. / regionWidthHz;  // centers spaced at half a region width
+  const long numRegions = long(0.5 * sampleRate * _regionRate) + 2;  // up to Nyquist
   _weights.assign(numRegions, 0.);
   _surplus.assign(numRegions, 0.);
-  _regionRate = 2. / regionWidthHz;
   _maxResidueOffset = maxResidueOffsetSec;
 }
 
+// A kept peak's share of a region's residue is its amplitude's fraction of
+// the total kept-amplitude weight deposited there; summing over the two
+// straddled regions hands every region's surplus out completely wherever
+// any kept peak reaches it.
 double AssociateBandwidth::computeNoiseEnergy(double freq, double amp) const
 {
-  if (freq < 0.)
+  const double pos = freq * _regionRate;
+  const long lo = long(pos);
+  const double a = pos - lo;
+  const double part[2] = {(1. - a) * amp, a * amp};
+  double e = 0.;
+  for (int i = 0; i < 2; ++i)
   {
-    return 0.;
+    const long r = lo + i;
+    if ((r < kLowestRegion) || (r >= long(_weights.size()))) continue;
+    if ((part[i] <= 0.) || (_weights[r] <= 0.)) continue;
+    e += _surplus[r] * (part[i] / _weights[r]);
   }
-  const double bin = freq * _regionRate;
-  const int posBelow = findRegionBelow(bin, _surplus.size());
-  const int posAbove = posBelow + 1;
-  const double alpha = computeAlpha(bin, _surplus.size());
-
-  // the two lowest regions are ignored; surplus share is weighted by the
-  // peak's amplitude
-  const int lowestRegion = 2;
-  double noise = 0.;
-  if ((posAbove < int(_surplus.size())) && (alpha != 0.) && (posAbove >= lowestRegion))
-  {
-    noise += _surplus[posAbove] * alpha * amp / _weights[posAbove];
-  }
-  if (posBelow >= lowestRegion)
-  {
-    noise += _surplus[posBelow] * (1. - alpha) * amp / _weights[posBelow];
-  }
-  return noise;
-}
-
-void addNoiseEnergy(Peak& pk, double enoise)
-{
-  double e = double(pk.amp) * pk.amp;  // current total energy
-  double n = e * pk.bw;                // current noise energy
-  if (e < n)
-  {
-    e = n;
-  }
-  if (n + enoise > 0.)
-  {
-    pk.bw = float((n + enoise) / (e + enoise));
-    pk.amp = float(std::sqrt(e + enoise));
-  }
-  else
-  {
-    pk.bw = 0.f;
-    pk.amp = float(std::sqrt(e - n));
-  }
+  return e;
 }
 
 void AssociateBandwidth::associateBandwidth(PeakFrame& frame)
 {
-  if (frame.numKept == 0)
-  {
-    return;
-  }
   auto& peaks = frame.peaks;
+  const size_t numKept = frame.numKept;
 
-  // kept peaks accumulate as amplitude weights, rejected ones as residue
-  // energy
-  for (size_t i = 0; i < frame.numKept; ++i)
+  for (size_t i = 0; i < numKept; ++i)
   {
-    if (peaks[i].freq > 0.f)
-    {
-      distribute(peaks[i].freq * _regionRate, peaks[i].amp, _weights);
-    }
+    distribute(_weights, peaks[i].freq * _regionRate, peaks[i].amp);
   }
-  for (size_t i = frame.numKept; i < peaks.size(); ++i)
+  for (size_t i = numKept; i < peaks.size(); ++i)
   {
-    // residue whose reassigned time points away from this frame belongs to
-    // (and is counted in) the frame nearer its true time
+    // the residue gate: a rejected peak's energy counts only in the frame
+    // nearest its reassigned time (see the header for why)
     if ((_maxResidueOffset > 0.f) && (fabsf(peaks[i].timeOffset) > _maxResidueOffset))
     {
       continue;
     }
-    if (peaks[i].freq > 0.f)
-    {
-      distribute(peaks[i].freq * _regionRate, double(peaks[i].amp) * peaks[i].amp, _surplus);
-    }
+    distribute(_surplus, peaks[i].freq * _regionRate,
+               double(peaks[i].amp) * peaks[i].amp);
   }
-  for (size_t i = 0; i < frame.numKept; ++i)
+
+  // compute every share against the original amplitudes before any update
+  std::vector<double> enoise(numKept);
+  for (size_t i = 0; i < numKept; ++i)
   {
-    Peak& pk = peaks[i];
-    pk.bw = 0.f;
-    addNoiseEnergy(pk, computeNoiseEnergy(pk.freq, pk.amp));
+    enoise[i] = computeNoiseEnergy(peaks[i].freq, peaks[i].amp);
+  }
+  for (size_t i = 0; i < numKept; ++i)
+  {
+    addNoiseEnergy(peaks[i], enoise[i]);
   }
 
   std::fill(_weights.begin(), _weights.end(), 0.);
   std::fill(_surplus.begin(), _surplus.end(), 0.);
+}
+
+// energy-preserving update: sine energy e = amp², noise energy n = e·bw;
+// adding enoise leaves total energy in amp² and its noise fraction in bw
+void addNoiseEnergy(Peak& pk, double enoise)
+{
+  const double e = double(pk.amp) * pk.amp;
+  const double total = e + enoise;
+  if (total <= 0.) return;
+  const double n = e * pk.bw;
+  pk.bw = float((n + enoise) / total);
+  pk.amp = float(sqrt(total));
 }
 
 }  // namespace ml::utu
