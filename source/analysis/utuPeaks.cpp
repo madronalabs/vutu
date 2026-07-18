@@ -2,6 +2,11 @@
 // vutu
 // Copyright (c) 2026 Madrona Labs LLC. http://www.madronalabs.com
 
+// Implemented from Fitz & Fulop, "A Unified Theory of Time-Frequency
+// Reassignment" (Fig. 3 consensus regions, Sec. 7 pruning); no Loris
+// source consulted. Selection behavior is pinned by the utucompare
+// selftests (sine, two-sine, crop-burst, silence).
+
 #include "utuPeaks.h"
 
 #include <algorithm>
@@ -16,122 +21,96 @@ void PeakSelector::configure(float sampleRate, float cropTimeSec)
   _maxTimeOffsetSec = cropTimeSec;
 }
 
+// Near a dominant component the map from bin frequency to reassigned
+// frequency flattens onto the component (Fig. 3), so the frequency
+// correction runs positive below it and negative above it: each component
+// is a positive-to-negative sign crossing of freqCorr between adjacent
+// bins. Emit one candidate per crossing, at the bin needing the smaller
+// correction; that bin's data is the closest sample of the consensus.
 void PeakSelector::selectPeaks(const ReassignedSpectrum& spectrum, float minFreqHz,
                                PeakFrame& frame) const
 {
   frame.peaks.clear();
   frame.numKept = 0;
 
-  const long n = spectrum.fftSize();
-  const float* freqCorr = spectrum.frame().freqCorr.data();
-  const float* timeCorr = spectrum.frame().timeCorr.data();
-  const float sampsToHz = _sampleRate / n;
-  const float minFreqSample = minFreqHz / sampsToHz;
-  const float maxCorrSamples = _maxTimeOffsetSec * _sampleRate;
-  const float oneOverSR = 1.f / _sampleRate;
-
-  const long endJ = (n / 2) - 2;
-  long startJ = 1;
-
-  // skip bins below the frequency floor; as in Loris, fsample enters the
-  // scan one bin stale
-  float fsample;
-  do
+  const auto& f = spectrum.frame();
+  const long bins = f.bins;
+  const double binHz = double(_sampleRate) / f.fftSize;
+  for (long j = 1; j + 1 < bins; ++j)
   {
-    fsample = startJ + freqCorr[startJ];
-    ++startJ;
-  } while ((fsample < minFreqSample) && (startJ < endJ));
+    if (!((f.freqCorr[j] > 0.f) && (f.freqCorr[j + 1] <= 0.f))) continue;
+    const long idx = (f.freqCorr[j] < -f.freqCorr[j + 1]) ? j : j + 1;
 
-  for (long j = startJ; j < endJ; ++j)
-  {
-    // a change from positive to negative frequency correction indicates a
-    // concentration of energy in the spectrum
-    const float nextFsample = (j + 1) + freqCorr[j + 1];
-    if ((fsample > j) && (nextFsample < j + 1))
-    {
-      // take the candidate with the smaller correction
-      float freqSample;
-      long peakIdx;
-      if ((fsample - j) < ((j + 1) - nextFsample))
-      {
-        freqSample = fsample;
-        peakIdx = j;
-      }
-      else
-      {
-        freqSample = nextFsample;
-        peakIdx = j + 1;
-      }
+    const float freq = float((idx + f.freqCorr[idx]) * binHz);
+    if (freq < minFreqHz) continue;
 
-      const float freq = freqSample * sampsToHz;
-      if (freq >= minFreqHz)
-      {
-        const float tc = timeCorr[peakIdx];
-        if (fabsf(tc) < maxCorrSamples)
-        {
-          Peak pk;
-          pk.freq = freq;
-          pk.amp = spectrum.magnitudeAt(peakIdx);
-          pk.bw = 0.f;
-          pk.phase = spectrum.phaseAt(peakIdx);
-          pk.timeOffset = tc * oneOverSR;
-          frame.peaks.push_back(pk);
-        }
-      }
-    }
-    fsample = nextFsample;
+    // Sec. 7: a large time reassignment means the energy is poorly
+    // represented at this window position and is better captured by a
+    // neighboring frame; keeping it would smear events across frames
+    const float timeOffsetSec = f.timeCorr[idx] / _sampleRate;
+    if (fabsf(timeOffsetSec) >= _maxTimeOffsetSec) continue;
+
+    Peak pk;
+    pk.freq = freq;
+    pk.amp = spectrum.magnitudeAt(idx);
+    pk.phase = spectrum.phaseAt(idx);
+    pk.timeOffset = timeOffsetSec;
+    frame.peaks.push_back(pk);
   }
 }
 
+// Loudest-first amplitude thinning: every kept peak claims ±freqResolution
+// of spectrum; quieter peaks inside a claimed band, and peaks below the
+// amplitude floor, are rejected but retained after the partition point as
+// residue for bandwidth association. Kept amplitudes fade linearly over
+// the 10 dB above the floor so partials don't pop in and out at the
+// threshold. Peaks reassigned to negative absolute time are meaningless
+// and dropped entirely.
 void thinPeaks(PeakFrame& frame, float freqResolutionHz, float ampFloorDb, double frameTimeSec)
 {
+  const float threshold = powf(10.f, 0.05f * ampFloorDb);
+  const float beginFade = powf(10.f, 0.05f * (ampFloorDb + 10.f));
+
   auto& peaks = frame.peaks;
-
-  // absolute magnitude thresholds; fade quiet kept peaks out over 10 dB
-  const float threshold = static_cast<float>(std::pow(10., 0.05 * ampFloorDb));
-  const float beginFade = static_cast<float>(std::pow(10., 0.05 * (ampFloorDb + 10.)));
-
-  // louder peaks are preferred
+  peaks.erase(std::remove_if(peaks.begin(), peaks.end(),
+                             [frameTimeSec](const Peak& p)
+                             { return frameTimeSec + p.timeOffset < 0.; }),
+              peaks.end());
   std::sort(peaks.begin(), peaks.end(),
             [](const Peak& a, const Peak& b) { return a.amp > b.amp; });
 
-  // negative absolute times are not real; discard them entirely
-  peaks.erase(std::remove_if(peaks.begin(), peaks.end(),
-                             [frameTimeSec](const Peak& p)
-                             { return (p.timeOffset + frameTimeSec) < 0.; }),
-              peaks.end());
-
-  size_t numKept = 0;
-  for (size_t i = 0; i < peaks.size(); ++i)
+  std::vector<Peak> kept, residue;
+  kept.reserve(peaks.size());
+  residue.reserve(peaks.size());
+  for (const Peak& p : peaks)
   {
-    Peak& pk = peaks[i];
-    const float lower = pk.freq - freqResolutionHz;
-    const float upper = pk.freq + freqResolutionHz;
     bool masked = false;
-    for (size_t m = 0; m < numKept; ++m)
+    for (const Peak& k : kept)
     {
-      if ((peaks[m].freq > lower) && (peaks[m].freq < upper))
+      if (fabsf(k.freq - p.freq) < freqResolutionHz)
       {
         masked = true;
         break;
       }
     }
-
-    if ((pk.amp > threshold) && !masked)
+    if (masked || (p.amp < threshold))
     {
-      if (pk.amp < beginFade)
-      {
-        const float alpha = (beginFade - pk.amp) / (beginFade - threshold);
-        pk.amp *= (1.f - alpha);
-      }
-      if (i != numKept)
-      {
-        std::swap(peaks[i], peaks[numKept]);
-      }
-      ++numKept;
+      residue.push_back(p);
+      continue;
     }
+    Peak q = p;
+    if (q.amp < beginFade)
+    {
+      const float alpha = (beginFade - q.amp) / (beginFade - threshold);
+      q.amp *= 1.f - alpha;
+    }
+    kept.push_back(q);
   }
-  frame.numKept = numKept;
+
+  frame.numKept = kept.size();
+  std::copy(residue.begin(), residue.end(),
+            std::copy(kept.begin(), kept.end(), peaks.begin()));
+  peaks.resize(kept.size() + residue.size());
 }
 
 }  // namespace ml::utu

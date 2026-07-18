@@ -30,9 +30,9 @@ struct PeakFrame
                       // as noise for bandwidth association
 };
 
-// Port of Loris SpectralPeakSelector::selectReassignmentMinima. Near a
-// dominant component, all nearby bins reassign to approximately the same
-// frequency (the "consensus" regions of Fitz & Fulop Fig. 3): the map from
+// Peak selection on the reassigned spectrum. Near a dominant component,
+// all nearby bins reassign to approximately the same frequency (the
+// "consensus" regions of Fitz & Fulop Fig. 3): the map from
 // bin frequency to reassigned frequency flattens, and crosses the identity
 // at the component itself. Emitting a peak wherever the correction crosses
 // from positive to negative finds those crossings — one estimate per
@@ -51,8 +51,8 @@ class PeakSelector
   float _maxTimeOffsetSec{0.f};
 };
 
-// Port of Loris Analyzer::thinPeaks: consider peaks loudest first, drop
-// peaks whose reassigned absolute time is negative, reject peaks within
+// Amplitude thinning: consider peaks loudest first, drop peaks whose
+// reassigned absolute time is negative, reject peaks within
 // ±freqResolution of an already-kept louder peak or below the amplitude
 // floor, and fade kept amplitudes over the 10 dB above the floor. Rejected
 // peaks are kept after the partition point for bandwidth association.
