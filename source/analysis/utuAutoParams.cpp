@@ -1352,30 +1352,44 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
   out.budget = c.budget;
   walkQuality(c, out.params, out.hiCut, out, std::move(probe));
 
-  // ground-truth budget verification: the probe p90 is a statistic taken
+  // Ground-truth budget verification. The probe p90 is a statistic taken
   // at a handful of sites, not a guarantee — dense mixes have exceeded it
-  // (measured: probe 63, achieved 68). Run the real analysis at the final
-  // parameters and, while the achieved simultaneous count is over budget,
-  // step the quality ladder back: floor up in fine 1.5 dB steps (real
-  // material has harmonic shelves — a coarse step over one gives back far
-  // more partials than the budget asked; measured on cello: a 3 dB step
-  // dropped 66 -> 50 where 64 was the target), then hiCut down toward
-  // 2 kHz once the floor caps.
+  // (measured: probe 63, achieved 68) and steady ones fall short of it.
+  // The amplitude floor is the knob that spends whatever remains, so treat
+  // it as a search target against the real analysis: bracket the floor
+  // where the achieved simultaneous count crosses the budget, then bisect
+  // until the budget is met as closely as the material allows (real
+  // material has harmonic shelves — cello jumps 66 -> 55 across 1.5 dB —
+  // so fixed steps alone strand partials the budget could carry). hiCut
+  // walks down toward 2 kHz only if the floor caps out while still over.
   {
     const float kThirdOctave = 1.259921f;
     const float floorCap = std::min(kAmpFloorHi, c.ampFloorV1 + 15.f);
-    for (int guard = 0; guard < 24; ++guard)
+    int runs = 0;
+    auto achievedAt = [&](float floorDb) -> int
     {
-      auto partials = analyzeToPartials(c.x, c.n, out.params);
+      ++runs;
+      AnalyzerParams trial = out.params;
+      trial.ampFloor = floorDb;
+      auto partials = analyzeToPartials(c.x, c.n, trial);
       cutHighs(*partials, out.hiCut);
       cleanOutliers(*partials);
-      if (partials->partials.empty()) break;
+      if (partials->partials.empty()) return 0;
       calcStats(*partials);
-      out.achievedSimultaneous = int(partials->stats.maxActivePartials);
-      if (out.achievedSimultaneous <= c.budget) break;
-      if (out.params.ampFloor + 1.5f <= floorCap)
+      return int(partials->stats.maxActivePartials);
+    };
+
+    float floor = out.params.ampFloor;
+    int n = achievedAt(floor);
+    float overFloor = 0.f;  // a floor known to exceed the budget (0 = none)
+
+    // over budget: raise the floor to the cap, then shed hiCut
+    while ((n > c.budget) && (runs < 24))
+    {
+      if (floor + 1.5f <= floorCap)
       {
-        out.params.ampFloor += 1.5f;
+        overFloor = floor;
+        floor += 1.5f;
       }
       else if (out.hiCut / kThirdOctave >= 2000.f)
       {
@@ -1385,8 +1399,44 @@ AutoAnalyzerParams computeAnalyzerParams(const float* samples, size_t n, float s
       {
         break;  // out of ladder; leave the overshoot on record
       }
+      n = achievedAt(floor);
       out.budgetLimited = true;
     }
+
+    // under budget with floor headroom: descend to spend the remainder
+    while ((n < c.budget) && (overFloor == 0.f) && (floor - 1.5f >= kAmpFloorLo) &&
+           (runs < 24))
+    {
+      const float trial = floor - 1.5f;
+      const int m = achievedAt(trial);
+      if (m > c.budget)
+      {
+        overFloor = trial;
+        break;
+      }
+      floor = trial;
+      n = m;
+    }
+
+    // bisect the bracket toward the budget
+    while ((overFloor != 0.f) && (n != c.budget) && (floor - overFloor > 0.4f) &&
+           (runs < 24))
+    {
+      const float mid = 0.5f * (floor + overFloor);
+      const int m = achievedAt(mid);
+      if (m > c.budget)
+      {
+        overFloor = mid;
+      }
+      else
+      {
+        floor = mid;
+        n = m;
+      }
+    }
+
+    out.params.ampFloor = floor;
+    out.achievedSimultaneous = n;
   }
 
   // noise regions. Mod-driven: the reassigned spectrum is clean of
