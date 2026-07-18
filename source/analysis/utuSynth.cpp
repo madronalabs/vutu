@@ -23,11 +23,16 @@ namespace
 constexpr double kPi = 3.14159265358979324;
 constexpr double kTwoPi = 2. * kPi;
 
-// noise modulator, gain-matched to the model's modulation energy by ear
-// and by the render-RMS selftest: uniform noise through two lowpass SVFs
+// Noise modulator: uniform noise through two flat (Butterworth) lowpass
+// SVFs. Q must not peak: a resonant modulator rings the noise ±cutoff
+// around every carrier, planting shadow peaks beside each partial where
+// the source has valleys (measured as a mel-spectral regression on dense
+// material). The gain sets E[nz²] = 1/2, which makes a bw = 1 partial
+// carry exactly the energy its amplitude claims — the same bookkeeping
+// addNoiseEnergy uses (verified by the noise-bw and bw-render selftests).
 constexpr float kModCutoffHz = 500.f;
-constexpr float kModQ = 1.414f;
-constexpr float kModGain = 11.11f;
+constexpr float kModQ = 0.707f;
+constexpr float kModGain = 12.67f;
 
 // deterministic uniform noise in [-1, 1] (LCG; every partial gets its own
 // stream so partials decorrelate)

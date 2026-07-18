@@ -1495,6 +1495,34 @@ ml::VutuPartialsData* loadPartialsFile(const std::string& path)
   return ml::jsonToVutuPartials(json);
 }
 
+// render <file.utu> <out.wav> [sr]: synthesize saved partials — separates
+// analysis regressions from synthesis regressions when chasing scores
+int renderCmd(const char* utuPath, const char* outPath, double sr)
+{
+  std::unique_ptr<ml::VutuPartialsData> pd(loadPartialsFile(utuPath));
+  if (!pd || pd->partials.empty())
+  {
+    printf("could not load partials from %s\n", utuPath);
+    return 2;
+  }
+  printf("%s: %zu partials\n", utuPath, pd->partials.size());
+  ml::utu::SynthParams sp;
+  sp.sampleRate = float(sr);
+  sp.fadeTime = 0.001f;
+  ml::utu::PartialSynthesizer synth;
+  synth.setParams(sp);
+  std::vector<float> out;
+  synth.render(*pd, out);
+  float peak = 0.f;
+  for (float v : out) peak = std::max(peak, fabsf(v));
+  if (peak > 1.f)
+    for (auto& v : out) v *= 0.999f / peak;
+  const int fmt = SF_FORMAT_WAV | SF_FORMAT_PCM_24;
+  if (!writeAudio(outPath, out.data(), out.size(), sr, fmt)) return 2;
+  printf("wrote %s (%zu samples, peak %.3f)\n", outPath, out.size(), peak);
+  return 0;
+}
+
 int abDir(const char* srcDirPath, const char* goldenDirPath, int budget)
 {
   namespace fs = std::filesystem;
@@ -1611,12 +1639,17 @@ int abDir(const char* srcDirPath, const char* goldenDirPath, int budget)
       std::unique_ptr<ml::VutuPartialsData> gp(loadPartialsFile(goldenUtu.string()));
       if (gp && !gp->partials.empty())
       {
-        const double ratio =
-            double(partials->partials.size()) / double(gp->partials.size()) - 1.;
+        // compare energetically significant partials only: raw counts are
+        // dominated by sub--40 dB junk fragments near the amplitude floor,
+        // whose number says nothing about the model
+        const size_t curSig = significantPartials(*partials).size();
+        const size_t goldSig = significantPartials(*gp).size();
+        const double ratio = double(curSig) / std::max<size_t>(1, goldSig) - 1.;
         const bool bad = fabs(ratio) > kAbCountSlack;
         if (bad) fileOk = false;
-        printf("    partials   %zu vs %zu (%+.1f%%)%s\n", partials->partials.size(),
-               gp->partials.size(), 100. * ratio, bad ? "  DRIFTED" : "");
+        printf("    partials   %zu vs %zu significant (%+.1f%%; %zu vs %zu raw)%s\n", curSig,
+               goldSig, 100. * ratio, partials->partials.size(), gp->partials.size(),
+               bad ? "  DRIFTED" : "");
       }
     }
     if (!fileOk) ++failures;
@@ -1638,10 +1671,13 @@ int main(int argc, char** argv)
         "  convert-dir <dir> [budget]      auto-analyze + resynthesize every audio file\n"
         "  ab-dir <dir> <goldendir> [budget]  score current engine vs golden renders\n"
         "  score <src> <render>            reconstruction metrics\n"
+        "  render <utu> <out.wav> [sr]     synthesize saved partials\n"
         "  tune <file> [budget]            coordinate-descent parameter search\n");
     return 2;
   }
   const std::string cmd(argv[1]);
+  if (cmd == "render" && argc > 3)
+    return renderCmd(argv[2], argv[3], argc > 4 ? atof(argv[4]) : 44100.);
   if (cmd == "selftest") return selfTest(argc > 2 ? argv[2] : nullptr);
   if (cmd == "auto-test" && argc > 2) return autoTest(argv[2]);
   if (cmd == "convert-dir" && argc > 2)

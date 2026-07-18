@@ -465,7 +465,7 @@ inline VutuPartialsData* valueTreeToVutuPartials(const Tree<Value>& tree)
   size_t nPartials{0};
   if(tree.getNode("n_partials"))
   {
-    int nPartials = tree["n_partials"].getIntValue();
+    nPartials = tree["n_partials"].getIntValue();
   }
   else
   {

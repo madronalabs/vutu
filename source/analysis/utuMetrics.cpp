@@ -209,6 +209,18 @@ ReconstructionScore scoreReconstruction(const float* src, size_t nSrc, const flo
   // A global gain error is nearly inaudible; spectral tilt and holes are
   // not, so the mean difference is removed before the RMS
   {
+    // audibility floor: band content more than 70 dB below the sound's
+    // loudest band is inaudible detail. Without the floor, near-empty
+    // bands — a quantization floor in the source, artifact skirts in a
+    // render — contribute large dB differences no ear can hear, and can
+    // dominate the RMS on clean material.
+    double maxBand = 0.;
+    for (size_t f : active)
+    {
+      for (int b = 0; b < kNumBands; ++b) maxBand = std::max(maxBand, se.bands[b][f]);
+    }
+    const double floorE = std::max(1e-14, maxBand * 1e-7);
+
     std::vector<float> diffs;
     diffs.reserve(active.size() * kNumBands);
     double meanDiff = 0.;
@@ -216,8 +228,8 @@ ReconstructionScore scoreReconstruction(const float* src, size_t nSrc, const flo
     {
       for (int b = 0; b < kNumBands; ++b)
       {
-        const double sDb = 10. * log10(std::max(1e-14, se.bands[b][f]));
-        const double rDb = 10. * log10(std::max(1e-14, re.bands[b][f]));
+        const double sDb = 10. * log10(std::max(floorE, se.bands[b][f]));
+        const double rDb = 10. * log10(std::max(floorE, re.bands[b][f]));
         diffs.push_back(float(rDb - sDb));
         meanDiff += rDb - sDb;
       }
