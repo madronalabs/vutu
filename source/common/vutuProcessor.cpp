@@ -35,10 +35,14 @@ size_t getEndFrame(const ml::Sample& sample, Interval srcInterval)
 
 void readParameterDescriptions(ParameterDescriptionList& params)
 {
+  // NB: the current madronalib honors "real_default" (a value in real units) or
+  // "default" (normalized), but NOT the old mlvg "plaindefault" key. A param that
+  // supplies only a range and an unrecognized default key silently falls back to
+  // the range midpoint (normalized 0.5), so use "real_default" for all dials.
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "resolution" },
     { "range", { 8, 1024 } },
-    { "plaindefault", 40 },
+    { "real_default", 40 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -46,7 +50,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "window_width" },
     { "range", {16, 768} },
-    { "plaindefault", 80 },
+    { "real_default", 80 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -54,14 +58,14 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "amp_floor" },
     { "range", {-90, -20} },
-    { "plaindefault", -60 },
+    { "real_default", -60 },
     { "units", "dB" }
   } ) );
   
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "freq_drift" },
     { "range", {2, 80} },
-    { "plaindefault", 40 },
+    { "real_default", 40 },
     { "log", false },
     { "units", "Hz" }
   } ) );
@@ -69,7 +73,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "lo_cut" },
     { "range", {20, 2000} },
-    { "plaindefault", 20 },
+    { "real_default", 20 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -77,7 +81,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "hi_cut" },
     { "range", {200, 20000} },
-    { "plaindefault", 20000 },
+    { "real_default", 20000 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -85,7 +89,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "noise_width" },
     { "range", {10, 5000} },
-    { "plaindefault", 500 },
+    { "real_default", 500 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -93,7 +97,7 @@ void readParameterDescriptions(ParameterDescriptionList& params)
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "fundamental" },
     { "range", {22, 2200} },
-    { "plaindefault", 220 },
+    { "real_default", 220 },
     { "log", true },
     { "units", "Hz" }
   } ) );
@@ -102,15 +106,15 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "name", "test_volume" },
     { "range", {0, 0.5f} },
     { "log", false },
-    { "plaindefault", 0.f }
-    
+    { "real_default", 0.f }
+
   } ) );
   
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "output_volume" },
     { "range", {-60, 0} },
     { "log", false },
-    { "plaindefault", -6 },
+    { "real_default", -6 },
     { "units", "dB" }
   } ) );
   
