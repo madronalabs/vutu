@@ -117,7 +117,24 @@ void readParameterDescriptions(ParameterDescriptionList& params)
     { "real_default", -6 },
     { "units", "dB" }
   } ) );
-  
+
+  // analysis mode: 1 = automatic parameter estimation (default), 0 = manual.
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
+    { "name", "auto_mode" },
+    { "range", {0, 1} },
+    { "default", 1 }
+  } ) );
+
+  // maximum simultaneously-active partials budget. A "list" param: its real value
+  // is the item INDEX 0..5; the controller maps index -> (16 << index) to get the
+  // budget 16..512. real_default 2 -> index 2 -> 64.
+  params.push_back( std::make_unique< ParameterDescription >(WithValues{
+    { "name", "max_active" },
+    { "units", "list" },
+    { "listitems", "16/32/64/128/256/512" },
+    { "real_default", 2 }
+  } ) );
+
   params.push_back( std::make_unique< ParameterDescription >(WithValues{
     { "name", "sample/start_time" },
     { "range", {0, 1} },

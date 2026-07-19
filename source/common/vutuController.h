@@ -21,6 +21,8 @@
 
 using namespace ml;
 
+namespace ml { namespace utu { struct AnalyzerParams; } }
+
 
 //-----------------------------------------------------------------------------
 // VutuController: owns the parameters and does all the non-realtime
@@ -38,14 +40,28 @@ public:
   // Actor interface
   void onMessage(Message m) override;
 
-  // enable / disable the right buttons on the View
+  // enable / disable the right buttons on the View, and lock the analysis
+  // dials when in auto mode.
   void setButtonEnableStates();
 
   // send the current value of one / all params to the View and Processor.
   void broadcastParam(Path pname, uint32_t flags);
   void broadcastParams();
 
+  // automatic-analysis mode helpers.
+  bool autoMode();                 // true when the auto_mode param is on
+  int activeBudget();              // max active partials from the max_active chooser
+  void runAutoParams();            // estimate params for the source, write dials, analyze
+
 private:
+
+  // fill vx with the faded analysis-interval samples; false if no source. srOut = sr.
+  bool getAnalysisIntervalSamples(std::vector< float >& vx, int& srOut);
+
+  // store an analysis result (trim/clean/stats/info + record params used).
+  int finishAnalysis(std::unique_ptr< VutuPartialsData > newPartials,
+                     const ml::utu::AnalyzerParams& p, float hiCut);
+
 
   Path _controllerName;
   Path _processorName;

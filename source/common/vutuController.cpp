@@ -22,6 +22,7 @@
 // vutu analysis library
 #include "utuAnalyzer.h"
 #include "utuSynth.h"
+#include "utuAutoParams.h"
 
 using namespace ml;
 
@@ -59,6 +60,19 @@ void VutuController::broadcastParams()
   }
 }
 
+bool VutuController::autoMode()
+{
+  return params_.getRealFloatValue("auto_mode") > 0.5f;
+}
+
+int VutuController::activeBudget()
+{
+  // the max_active param's real value is the list item index 0..5.
+  int idx = (int)lround(params_.getRealFloatValue("max_active"));
+  idx = (idx < 0) ? 0 : ((idx > 5) ? 5 : idx);
+  return 16 << idx;  // 16, 32, 64, 128, 256, 512
+}
+
 VutuController::~VutuController()
 {
   // don't stop the master Timers-- there may be other plugin instances using it!
@@ -77,6 +91,14 @@ void VutuController::setButtonEnableStates()
   
   sendMessageToView({"widget/play_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
   sendMessageToView({"widget/export_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
+
+  // in auto mode the 7 analysis dials are shown but locked (dimmed, not editable).
+  bool dialsEnabled = !autoMode();
+  for(auto nm : {"resolution", "window_width", "amp_floor", "freq_drift", "lo_cut", "hi_cut", "noise_width"})
+  {
+    Path addr("widget", Path(nm), "set_prop", "enabled");
+    sendMessageToView({addr, dialsEnabled});
+  }
 }
 
 void VutuController::_debug()
@@ -260,6 +282,17 @@ void VutuController::showAnalysisInfo()
   TextFragment e(" max active: ", intToText(p->stats.maxActivePartials));
 
   TextFragment out(a, b, c, d, e);
+
+  // in manual mode, warn right after the max-active count if it exceeds the budget.
+  if(!autoMode())
+  {
+    int budget = activeBudget();
+    if((int)p->stats.maxActivePartials > budget)
+    {
+      out = TextFragment(out, " (over budget of ", intToText(budget), ")");
+    }
+  }
+
   _printToConsole(out);
 }
 
@@ -343,22 +376,22 @@ void VutuController::saveTextToPath(const TextFragment& text, TextPath savePath)
 
 }
 
-int VutuController::analyzeSample()
+// make a faded copy of the current analysis interval of the source sample.
+// returns false if there is no usable source. srOut is set to the sample rate.
+bool VutuController::getAnalysisIntervalSamples(std::vector< float >& vx, int& srOut)
 {
-  int status{ false };
-  
   auto totalFrames = getFrames(_sourceSample);
-  if(!totalFrames) return status;
-  
+  if(!totalFrames) return false;
+
   auto interval = valueToInterval(params_.getRealValue("analysis_interval"));
   auto frameInterval = interval*float(totalFrames);
-  
+
   int framesInInterval = frameInterval.x2 - frameInterval.x1;
+  if(framesInInterval <= 0) return false;
+
   const float kFadeTime = 0.001f;
   int fadeSamples = kFadeTime*_sourceSample.sampleRate;
 
-  // make a faded copy of the analysis interval
-  std::vector< float > vx;
   vx.resize(framesInInterval);
   int srcStart = frameInterval.x1;
   for(int i=0; i<framesInInterval; ++i)
@@ -381,8 +414,77 @@ int VutuController::analyzeSample()
     vx[i2] *= gain;
   }
 
-  // set sample rate and configure analyzer
-  int sr = _sourceSample.sampleRate;
+  srOut = _sourceSample.sampleRate;
+  return true;
+}
+
+// estimate the analysis parameters for the current source (constrained by the
+// active-partials budget), write them to the dials, and run the analysis.
+// fundamental stays manual and is not touched.
+void VutuController::runAutoParams()
+{
+  std::vector< float > vx;
+  int sr{0};
+  if(!getAnalysisIntervalSamples(vx, sr)) return;
+
+  auto r = utu::computeAnalyzerParams(vx.data(), vx.size(), float(sr), activeBudget());
+
+  params_.setFromRealValue("resolution", r.params.resolution);
+  params_.setFromRealValue("window_width", r.params.windowWidth);
+  params_.setFromRealValue("amp_floor", r.params.ampFloor);
+  params_.setFromRealValue("freq_drift", r.params.freqDrift);
+  params_.setFromRealValue("lo_cut", r.params.freqFloor);
+  params_.setFromRealValue("noise_width", r.params.noiseWidth);
+  params_.setFromRealValue("hi_cut", r.hiCut);
+
+  for(auto nm : {"resolution", "window_width", "amp_floor", "freq_drift", "lo_cut", "noise_width", "hi_cut"})
+  {
+    broadcastParam(Path(nm), 0);
+  }
+
+  // run the analysis with the FULL estimated params (r.params keeps
+  // sidelobeLevel etc. that the dials don't carry, so the partial budget is
+  // honored), not just the written-back dial values.
+  auto newPartials = utu::analyzeToPartials(vx.data(), vx.size(), r.params);
+  finishAnalysis(std::move(newPartials), r.params, r.hiCut);
+  broadcastPartialsData();
+  setButtonEnableStates();
+}
+
+// store an analysis result: trim, clean, compute stats, show info, and record
+// the params used. returns true if partials were produced.
+int VutuController::finishAnalysis(std::unique_ptr< VutuPartialsData > newPartials,
+                                   const utu::AnalyzerParams& p, float hiCut)
+{
+  if(!newPartials || (newPartials->partials.size() == 0)) return false;
+
+  _vutuPartials = std::move(newPartials);
+  cutHighs(*_vutuPartials, hiCut);
+  cleanOutliers(*_vutuPartials);
+  calcStats(*_vutuPartials);
+  showAnalysisInfo();
+
+  _vutuPartials->type = Symbol(kVutuPartialsFileType);
+  _vutuPartials->version = kVutuPartialsFileVersion;
+  _vutuPartials->sourceFile = sourceFileLoaded.getShortName();
+  _vutuPartials->sourceDuration = getDuration(_sourceSample);
+  _vutuPartials->resolution = p.resolution;
+  _vutuPartials->windowWidth = p.windowWidth;
+  _vutuPartials->ampFloor = p.ampFloor;
+  _vutuPartials->freqDrift = p.freqDrift;
+  _vutuPartials->loCut = p.freqFloor;
+  _vutuPartials->hiCut = hiCut;
+  return true;
+}
+
+int VutuController::analyzeSample()
+{
+  std::vector< float > vx;
+  int sr{0};
+  if(!getAnalysisIntervalSamples(vx, sr)) return false;
+  int framesInInterval = (int)vx.size();
+
+  // configure analyzer from the dial values
   auto res = params_.getRealFloatValue("resolution");
   auto width = params_.getRealFloatValue("window_width");
   auto drift = params_.getRealFloatValue("freq_drift");
@@ -403,30 +505,7 @@ int VutuController::analyzeSample()
   analyzerParams.noiseWidth = noiseWidth;
 
   auto newPartials = utu::analyzeToPartials(vx.data(), framesInInterval, analyzerParams);
-
-  if(newPartials && (newPartials->partials.size() > 0))
-  {
-    status = true;
-
-    _vutuPartials = std::move(newPartials);
-    cutHighs(*_vutuPartials, hiCut);
-    cleanOutliers(*_vutuPartials);
-    calcStats(*_vutuPartials);
-    showAnalysisInfo();
-
-    // store analysis params used
-    _vutuPartials->type = Symbol(kVutuPartialsFileType);
-    _vutuPartials->version = kVutuPartialsFileVersion;
-    _vutuPartials->sourceFile = sourceFileLoaded.getShortName();
-    _vutuPartials->sourceDuration = getDuration(_sourceSample);
-    _vutuPartials->resolution = res;
-    _vutuPartials->windowWidth = width;
-    _vutuPartials->ampFloor = floor;
-    _vutuPartials->freqDrift = drift;
-    _vutuPartials->loCut = loCut;
-    _vutuPartials->hiCut = hiCut;
-  }
-  return status;
+  return finishAnalysis(std::move(newPartials), analyzerParams, hiCut);
 }
 
 // generate the synthesized audio from the partials.
@@ -504,6 +583,33 @@ void VutuController::onMessage(Message m)
       Path whatParam = tail(addr);
       params_.setFromRealValue(whatParam, m.value);
       broadcastParam(whatParam, m.flags);
+
+      // react to the analysis-mode controls.
+      switch(hash(head(whatParam)))
+      {
+        case(hash("auto_mode")):
+        {
+          // lock / unlock the analysis dials, and analyze now if switching to auto.
+          setButtonEnableStates();
+          if(autoMode() && getSize(_sourceSample)) runAutoParams();
+          break;
+        }
+        case(hash("max_active")):
+        {
+          if(autoMode())
+          {
+            if(getSize(_sourceSample)) runAutoParams();
+          }
+          else if(_vutuPartials && (_vutuPartials->partials.size() > 0))
+          {
+            // manual: refresh the info line so the over-budget warning updates.
+            showAnalysisInfo();
+          }
+          break;
+        }
+        default:
+          break;
+      }
       break;
     }
     case(hash("set_prop")):
@@ -558,6 +664,9 @@ void VutuController::onMessage(Message m)
 
           params_.setValue("analysis_interval", intervalToValue(Interval{0, 1}));
           broadcastParam("analysis_interval", 0);
+
+          // in auto mode, analyze the newly loaded sample right away.
+          if(autoMode() && getSize(_sourceSample)) runAutoParams();
 
           messageHandled = true;
           break;

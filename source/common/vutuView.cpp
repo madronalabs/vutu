@@ -160,6 +160,16 @@ void VutuView::layoutView(DrawContext dc)
     positionLabelUnderDial(dialName);
   }
   
+  // auto-mode toggle + max-active chooser, in the gap between the analysis
+  // dials and the button grid.
+  float controlsX = 13.75f;
+  ml::Rect toggleRect(0, 0, 0.6, 0.6);
+  ml::Rect chooserRect(0, 0, 1.8, 1.8);
+  _view->_widgets["auto_mode"]->setBounds(alignCenterToPoint(toggleRect, {controlsX, dialsY1 - 0.5f}));
+  _view->_widgets["max_active"]->setBounds(alignCenterToPoint(chooserRect, {controlsX, dialsY2 - 0.25f}));
+  _view->_backgroundWidgets["auto_mode_label"]->setBounds(alignTopCenterToPoint(labelRect, {controlsX, dialsY1 + 0.0f}));
+  _view->_backgroundWidgets["max_active_label"]->setBounds(alignTopCenterToPoint(labelRect, {controlsX, dialsY2 - 1.6f}));
+
   // info: whole width
   _view->_widgets["info"]->setBounds(ml::Rect(0, bottomY, gx, 1));
   
@@ -272,6 +282,8 @@ void VutuView::makeWidgets()
   addControlLabel("fundamental_label", "fundamental");
   addControlLabel("test_volume_label", "fund. volume");
   addControlLabel("output_volume_label", "output volume");
+  addControlLabel("auto_mode_label", "auto");
+  addControlLabel("max_active_label", "max active");
 
   auto addOtherLabel = [&](Path name, TextFragment t)
   {
@@ -408,7 +420,19 @@ void VutuView::makeWidgets()
   _view->_widgets.add_unique< SampleDisplay >("synth", WithValues{
     //{"param", "analysis_interval" }
   } );
-  
+
+  // auto / manual analysis mode toggle
+  _view->_widgets.add_unique< ToggleButtonBasic >("auto_mode", WithValues{
+    {"param", "auto_mode" }
+  } );
+
+  // max active partials chooser (16..512)
+  _view->_widgets.add_unique< ChooserBasic >("max_active", WithValues{
+    {"param", "max_active" },
+    {"font", "d_din" },
+    {"text_size", 0.35f }
+  } );
+
 
   // play buttons disabled until we have a sample
   _view->_widgets["play_source"]->setProperty("enabled", false);
