@@ -82,6 +82,42 @@ the decay side of the same notes.
   density can't provide. Long-window pass owns partial identity; short-window
   pass links backwards in time from the stable side.
 
+## Execution notes for the implementing model
+
+Directives, not suggestions. The design judgment is finished and lives in
+the three papers; the job now is disciplined execution.
+
+1. **In silent steps (1, 2, 4), zero behavior change IS the spec.** Never
+   widen a tolerance or regenerate a golden to make a silent step pass. A
+   small numeric drift is a float-ordering bug to find, not noise. Known
+   trap in step 2: the hop is an integer sample count, so dt must be
+   computed exact-in-samples (the tracker's `dt()` already is) or `rate·dt`
+   will not reproduce the old Hz gate bit-exactly.
+2. **Failure here is silent, not loud.** Example: deleting `resolution`
+   before the freqDrift re-anchor lands gives a working-looking analysis
+   with fragmented tracks (default drift → 0 → every peak spawns a new
+   partial; no crash). After every step, diff partial count,
+   `maxActivePartials`, and the `achievedAt` floor on a reference set — do
+   not rely on crashes or test failures to surface mistakes.
+3. **No opportunistic cleanup inside roadmap steps.** The papers
+   deliberately preserve the loudest-first sort in `thinPeaks`, the
+   one-frame track death, and the `modDriven` gate. Cleanups go in separate
+   commits after the step's verification gate passes.
+4. **Any constant not derivable from the papers comes from a measurement
+   run** (`tune`, `auto-test`, `achievedAt` ground truth), recorded in the
+   commit message — never from plausibility. This applies especially to the
+   step-3 kept-peak density remeasure and `countP90` retune.
+5. **Listening gates are human gates.** Tests passing is not the gate for
+   steps 3, 5, 6. Stop at the gate and hand over with a note on what to
+   listen for.
+6. Sharp edges: the tracker's per-frame override argument becomes a *rate*
+   override, not Hz (step 2); the ERB radius is evaluated per pair at the
+   mid frequency inside the masking loop, not hoisted per frame (step 3);
+   the `.utu` migration reading old `freq_drift` needs the stored
+   `windowWidth` and must guard the absent/zero case (step 2).
+7. **Keep commits surgical.** The tree carries concurrent app-port work;
+   never stage files outside the step's scope.
+
 ## Summary table
 
 | # | Change | Paper | Audible? | Gate to proceed |
