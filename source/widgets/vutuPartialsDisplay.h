@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "mlvg.h"
+#include "manzanita.h"
 #include "vutuPartials.h"
 
 using namespace ml;
@@ -41,8 +41,10 @@ public:
   void resize(ml::DrawContext d) override;
   MessageList animate(int elapsedTimeInMs, ml::DrawContext dc) override;
   void draw(ml::DrawContext d) override;
-  void receiveNamedRawPointer(Path name, void* ptr) override;
-  
+
+  // receive a pointer to the partials this widget displays (called by the View).
+  void receivePartials(const VutuPartialsData* p);
+
   void redrawPartials();
   
   // overriding this because we will probably need multiple parameters.

@@ -10,9 +10,10 @@
 #include "MLSignalProcessor.h"
 #include "MLDSPUtils.h"
 #include "vutuParameters.h"
-#include "MLRtAudioProcessor.h"
+#include "MLAudioContext.h"
+#include "MLAudioTask.h"
 #include "MLActor.h"
-#include "MLMath2D.h"
+#include "MZMath2D.h"
 #include "MLDSPSample.h"
 
 using namespace ml;
@@ -25,18 +26,18 @@ void readParameterDescriptions(ParameterDescriptionList& params);
 
 
 class VutuProcessor final :
-public RtAudioProcessor
+public SignalProcessor, public Actor
 {
   // sine generators.
-  SineGen testSine;
-  
+  SineGen< float > testSine;
+
 public:
   VutuProcessor(TextFragment appName, size_t instanceNum,
-                   size_t nInputs, size_t nOutputs,
-                   int sampleRate, const ParameterDescriptionList& pdl);
+                   const ParameterDescriptionList& pdl);
   ~VutuProcessor() = default;
-  
-  void processVector(MainInputs inputs, MainOutputs outputs, void *stateDataUnused) override;
+
+  // run our DSP for one AudioContext block. Called by the processVutu() free function.
+  void processAudioVectors(AudioContext* ctx);
 
   void onMessage(Message msg) override;
   
@@ -59,3 +60,6 @@ private:
   void togglePlaybackState(Symbol whichSample);
 
 };
+
+// audio process function for the AudioTask: runs VutuProcessor's DSP for one block.
+void processVutu(AudioContext* ctx, VutuProcessor* state);

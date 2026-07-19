@@ -6,7 +6,7 @@
 #pragma once
 
 #include "MLDSPSample.h"
-#include "mlvg.h"
+#include "manzanita.h"
 #include "vutuPartials.h"
 
 using namespace ml;
@@ -48,8 +48,10 @@ public:
   MessageList animate(int elapsedTimeInMs, ml::DrawContext dc) override;
   void draw(ml::DrawContext d) override;
   MessageList processGUIEvent(const GUICoordinates& gc, GUIEvent e) override;
-  void receiveNamedRawPointer(Path name, void* ptr) override;
-  
+
+  // receive a pointer to the sample this widget displays (called by the View).
+  void receiveSample(const ml::Sample* p);
+
 
 };
 

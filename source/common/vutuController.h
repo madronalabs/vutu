@@ -5,9 +5,11 @@
 #pragma once
 
 #include "MLDSPSample.h"
-#include "MLFiles.h"
+#include "MZFiles.h"
 #include "MLPropertyTree.h"
-#include "MLAppController.h"
+#include "MLSignalProcessor.h"
+#include "MLActor.h"
+#include "MZProcessorUtils.h"
 
 #include "vutuParameters.h"
 #include "vutuProcessor.h"
@@ -21,36 +23,45 @@ using namespace ml;
 
 
 //-----------------------------------------------------------------------------
+// VutuController: owns the parameters and does all the non-realtime
+// orchestration (file I/O, analysis, synthesis). Replaces the old
+// mlvg AppController: SignalProcessor supplies the ParameterStore and the
+// setViewMessageHandler; Actor supplies the message queue.
 class VutuController final:
-  public AppController
+  public SignalProcessor, public Actor
 {
 public:
-  
-  VutuController(TextFragment appName, const ParameterDescriptionList& pdl);
+
+  VutuController(TextFragment appName, size_t instanceNum, const ParameterDescriptionList& pdl);
 	~VutuController();
 
   // Actor interface
   void onMessage(Message m) override;
 
-  // update the named collection of files and return a pointer to it.
-  FileTree* updateCollection(Path which);
-
   // enable / disable the right buttons on the View
   void setButtonEnableStates();
-  
+
+  // send the current value of one / all params to the View and Processor.
+  void broadcastParam(Path pname, uint32_t flags);
+  void broadcastParams();
+
 private:
+
+  Path _controllerName;
+  Path _processorName;
+
 
   ml::Sample _sourceSample;
   ml::Sample _synthesizedSample;
 
   std::unique_ptr< VutuPartialsData > _vutuPartials;
 
-  int saveSampleToWavFile(const ml::Sample& signal, Path wavPath);
+  int saveSampleToWavFile(const ml::Sample& signal, TextPath wavPath);
 
-  int loadSampleFromPath(Path samplePath);
-  int loadPartialsFromPath(Path samplePath);
+  int loadSampleFromPath(TextPath samplePath);
+  int loadPartialsFromPath(TextPath samplePath);
 
-  void saveTextToPath(const TextFragment& text, Path savePath);
+  void saveTextToPath(const TextFragment& text, TextPath savePath);
 
   void showAnalysisInfo();
   void setAnalysisParamsFromPartials();
@@ -74,10 +85,10 @@ private:
 
   // file paths
   // TODO persist in app prefs
-  Path recentSamplesInPath;
-  Path recentSamplesOutPath;
-  Path recentPartialsInPath;
-  Path recentPartialsOutPath;
+  TextPath recentSamplesInPath;
+  TextPath recentSamplesOutPath;
+  TextPath recentPartialsInPath;
+  TextPath recentPartialsOutPath;
 
   File sourceFileLoaded;
   

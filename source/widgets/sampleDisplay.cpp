@@ -1,6 +1,7 @@
 
 
 #include "sampleDisplay.h"
+#include "vutuParameters.h"
 
 using namespace ml;
 
@@ -64,7 +65,7 @@ MessageList SampleDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc)
 
 Rect SampleDisplay::getControlRect(int cIdx)
 {
-  auto currentValue = getParamValue(getTextProperty("param")).getIntervalValue();
+  auto currentValue = valueToInterval(getParamValue(getTextProperty("param")));
 
   Rect r;
   Rect bounds = getBounds();
@@ -74,13 +75,13 @@ Rect SampleDisplay::getControlRect(int cIdx)
   {
     case leftControl:
     {
-      float x1 = unityToX(currentValue.mX1);
+      float x1 = unityToX(currentValue.x1);
       r = Rect{x1, 0, kBracketWidth, bounds.height()};
       break;
     }
     case rightControl:
     {
-      float x2 = unityToX(currentValue.mX2) - kBracketWidth;
+      float x2 = unityToX(currentValue.x2) - kBracketWidth;
       r = Rect{x2, 0, kBracketWidth, bounds.height()};
       break;
     }
@@ -109,14 +110,14 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
   constexpr float kMaxGrabDist{2.f};
   
   Path pname{getTextProperty("param")};
-  Path paramRequestPath = Path("editor/set_param", pname);
+  Path paramRequestPath = Path("set_param", pname);
   
   // use top left relative coords
   Rect bounds = getBounds();
   Vec2 gridPosition = e.position - bounds.topLeft();
   bool doFineDrag = e.keyFlags & shiftModifier;
   
-  Interval prevValue = getParamValue(pname).getIntervalValue();
+  Interval prevValue = valueToInterval(getParamValue(pname));
   Interval newValue = prevValue;
   
   switch(hash(e.type))
@@ -140,7 +141,7 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
       // always push a sequence start message
       if(currentDragControl_ != none)
       {
-        r.push_back(Message{paramRequestPath, prevValue, kMsgSequenceStart});
+        r.push_back(Message{paramRequestPath, intervalToValue(prevValue), kMsgSequenceStart});
         engaged = true;
         _dragX1 = gridPosition.x();
       }
@@ -168,14 +169,14 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
         Rect controlRect = getControlRect(currentDragControl_);
         float crw = controlRect.width();
         float crwu = 0;// TEST xToUnity(crw);
-        float newLeftX = newValue.mX1;
-        float newRightX = newValue.mX2;
+        float newLeftX = newValue.x1;
+        float newRightX = newValue.x2;
         
         // clip dragging control and bump other control if needed
         if(currentDragControl_ == leftControl)
         {
           newLeftX += delta;
-          newValue.mX1 = newLeftX;
+          newValue.x1 = newLeftX;
           
           if(newLeftX > newRightX - marginU*2)
           {
@@ -185,7 +186,7 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
         else if(currentDragControl_ == rightControl)
         {
           newRightX += delta;
-          newValue.mX2 = newRightX;
+          newValue.x2 = newRightX;
           
           if(newRightX < newLeftX + marginU*2)
           {
@@ -194,14 +195,14 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
         }
         newLeftX = clamp(newLeftX, 0.f, 1.0f - marginU*2);
         newRightX = clamp(newRightX, marginU*2, 1.0f);
-        newValue.mX1 = newLeftX;
-        newValue.mX2 = newRightX;
+        newValue.x1 = newLeftX;
+        newValue.x2 = newRightX;
       }
       if(newValue != prevValue)
       {
         // if value changed, set value and mark the Widget dirty
-        setParamValue(pname, newValue);
-        r.push_back(Message{paramRequestPath, newValue, 0});
+        setNormalizedParamValue(pname, intervalToValue(newValue));
+        r.push_back(Message{paramRequestPath, intervalToValue(newValue), 0});
       }
       break;
     }
@@ -210,7 +211,7 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
       // if engaged, disengage and send a sequence end message
       if(engaged && (currentDragControl_ != none))
       {
-        r.push_back(Message{paramRequestPath, newValue, kMsgSequenceEnd});
+        r.push_back(Message{paramRequestPath, intervalToValue(newValue), kMsgSequenceEnd});
         engaged = false;
         currentDragControl_ = none;
       }
@@ -222,17 +223,10 @@ MessageList SampleDisplay::processGUIEvent(const GUICoordinates& gc, GUIEvent e)
   return r;
 }
 
-void SampleDisplay::receiveNamedRawPointer(Path name, void* ptr)
+void SampleDisplay::receiveSample(const ml::Sample* p)
 {
-  switch(hash(head(name)))
-  {
-    case(hash("sample")):
-      _pSample = static_cast< const ml::Sample* > (ptr);
-      sampleDirty_ = true;
-      break;
-    default:
-      break;
-  }
+  _pSample = p;
+  sampleDirty_ = true;
 }
 
 // Repaint the backing layer with an image of the entire sample.
@@ -259,7 +253,7 @@ bool SampleDisplay::paintSample(ml::DrawContext dc)
   drawToImage(_backingLayer.get());
   nvgBeginFrame(nvg, w, h, 1.0f);
   
-  auto color = getColor(dc, "partials");
+  auto color = dc.properties->getColorProperty("partials");
 
   // draw opaque black bg
   {
@@ -324,7 +318,7 @@ void SampleDisplay::draw(ml::DrawContext dc)
 {
   // get parameter value
   Path paramName{getTextProperty("param")};
-  auto currentValue = getParamValue(paramName).getIntervalValue();
+  auto currentValue = valueToInterval(getParamValue(paramName));
   
   NativeDrawContext* nvg = getNativeContext(dc);
   Rect bounds = getLocalBounds(dc, *this);
@@ -338,11 +332,11 @@ void SampleDisplay::draw(ml::DrawContext dc)
 
   auto unityToX = projections::linear({0, 1}, xRange);
 
-  float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", getFloat(dc, "common_stroke_width"));
+  float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", dc.properties->getFloatProperty("common_stroke_width"));
   int strokeWidth = gridSizeInPixels*strokeWidthMul;
   
-  auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
-  auto markColor = getColor(dc, "partials");
+  auto bgColor = getColorPropertyWithDefault("color", dc.properties->getColorProperty("panel_bg"));
+  auto markColor = dc.properties->getColorProperty("partials");
 
   // paint background
   {
@@ -395,7 +389,7 @@ void SampleDisplay::draw(ml::DrawContext dc)
       nvgStrokeColor(nvg, markColor);
       nvgStrokeWidth(nvg, strokeWidth*2);
       
-      Rect loopRect(unityToX(currentValue.mX1), 0, unityToX(currentValue.mX2 - currentValue.mX1), h);
+      Rect loopRect(unityToX(currentValue.x1), 0, unityToX(currentValue.x2 - currentValue.x1), h);
       loopRect = shrinkHeight(loopRect, margin*2);
       
       // tweak, shouldn't be needed

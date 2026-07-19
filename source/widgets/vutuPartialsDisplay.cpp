@@ -1,6 +1,7 @@
 
 
 #include "vutuPartialsDisplay.h"
+#include "vutuParameters.h"
 
 using namespace ml;
 
@@ -75,7 +76,7 @@ MessageList VutuPartialsDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc
     _partialsDirty = false;
     _dirty = true;
   }
-  auto fundamental = _params.getRealFloatValue("fundamental");
+  auto fundamental = params_.getRealFloatValue("fundamental");
   if(fundamental != prevFundamental)
   {
     _dirty = true;
@@ -85,17 +86,10 @@ MessageList VutuPartialsDisplay::animate(int elapsedTimeInMs, ml::DrawContext dc
   return MessageList{};
 }
 
-void VutuPartialsDisplay::receiveNamedRawPointer(Path name, void* ptr)
+void VutuPartialsDisplay::receivePartials(const VutuPartialsData* p)
 {
-  switch(hash(head(name)))
-  {
-    case(hash("partials")):
-      _pPartials = static_cast< const VutuPartialsData* > (ptr);
-      _partialsDirty = true;
-      break;
-    default:
-      break;
-  }
+  _pPartials = p;
+  _partialsDirty = true;
 }
 
 // Repaint the backing layer with an image of the partials.
@@ -134,25 +128,25 @@ void VutuPartialsDisplay::paintPartials(ml::DrawContext dc)
     size_t nPartials = _pPartials->stats.nPartials;
     std::cout << "painting " << nPartials << " partials... \n";
     
-    Interval analysisInterval = getParamValue("analysis_interval").getIntervalValue();
+    Interval analysisInterval = valueToInterval(getParamValue("analysis_interval"));
     
     Interval xRange{0.f, w - 1.f};
     Interval yRange{h - 1.f, 0.f};
-    Interval timeInterval{0.f, (analysisInterval.mX2 -  analysisInterval.mX1)*_pPartials->sourceDuration};
+    Interval timeInterval{0.f, (analysisInterval.x2 -  analysisInterval.x1)*_pPartials->sourceDuration};
     
     constexpr float kMinLineLength{2.f};
     auto xToTime = projections::linear(xRange, timeInterval);
     auto timeToX = projections::linear(timeInterval, xRange);
     
     auto freqRange = _pPartials->stats.freqRange;
-    freqRange.mX1 -= kFreqMargin;
-    freqRange.mX1 = max(freqRange.mX1, kFreqMargin);
+    freqRange.x1 -= kFreqMargin;
+    freqRange.x1 = max(freqRange.x1, kFreqMargin);
     
     auto freqToY = projections::intervalMap(freqRange, yRange, projections::exp(freqRange));
 
     // drawn amplidutes range from -60dB to max in partials
     auto ampRange = _pPartials->stats.ampRange;
-    ampRange.mX1 = dBToAmp(-90);
+    ampRange.x1 = dBToAmp(-90);
     
     Interval thicknessRange{h/512.f, h/32.f};
     //auto ampToThickness = projections::intervalMap(ampRange, thicknessRange, projections::unity);
@@ -340,14 +334,14 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
   int w = bounds.width();
   int h = bounds.height();
   const int gridSizeInPixels = dc.coords.gridSizeInPixels;
-  float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", getFloat(dc, "common_stroke_width"));
+  float strokeWidthMul = getFloatPropertyWithDefault("stroke_width", dc.properties->getFloatProperty("common_stroke_width"));
   int strokeWidth = gridSizeInPixels*strokeWidthMul;
 
   int margin = gridSizeInPixels/8;
   Rect marginBounds = shrink(bounds, margin);
   
-  auto bgColor = getColorPropertyWithDefault("color", getColor(dc, "panel_bg"));
-  auto markColor = getColor(dc, "partials");
+  auto bgColor = getColorPropertyWithDefault("color", dc.properties->getColorProperty("panel_bg"));
+  auto markColor = dc.properties->getColorProperty("partials");
   
   Interval xRange{0.f, w - 1.f};
   Interval yRange{h - 1.f, 0.f};
@@ -374,11 +368,11 @@ void VutuPartialsDisplay::draw(ml::DrawContext dc)
     
 
     auto freqRange = _pPartials->stats.freqRange;
-    freqRange.mX1 -= kFreqMargin;
-    freqRange.mX1 = max(freqRange.mX1, kFreqMargin);
+    freqRange.x1 -= kFreqMargin;
+    freqRange.x1 = max(freqRange.x1, kFreqMargin);
     
     auto freqToY = projections::intervalMap(freqRange, yRange, projections::exp(freqRange));
-    auto fundamental = _params.getRealFloatValue("fundamental");
+    auto fundamental = params_.getRealFloatValue("fundamental");
     
     float intervalStart = getFloatProperty("interval_start");
     float intervalEnd = getFloatProperty("interval_end");

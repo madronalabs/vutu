@@ -16,7 +16,7 @@
 #include "MLSerialization.h"
 #include "vutuPartials.h"
 
-#include "mlvg.h"
+#include "MZFiles.h"
 //#include "miniz.h"
 
 // vutu analysis library
@@ -28,10 +28,35 @@ using namespace ml;
 //-----------------------------------------------------------------------------
 // VutuController implementation
 
-VutuController::VutuController(TextFragment appName, const ParameterDescriptionList& pdl)
-  : AppController(appName, pdl)
+VutuController::VutuController(TextFragment appName, size_t instanceNum, const ParameterDescriptionList& pdl)
 {
+  // set up names for message routing and register ourself as an Actor.
+  _controllerName = TextFragment(appName, "controller", ml::textUtils::naturalNumberToText(instanceNum));
+  _processorName = TextFragment(appName, "processor", ml::textUtils::naturalNumberToText(instanceNum));
+  registerActor(_controllerName, this);
+
+  buildParams(pdl);
+  setDefaultParams();
+
   _debugTimer.start([=]() { _debug(); }, milliseconds(1000));
+}
+
+// send the current value of one param to the View (which the manzanita
+// AppView expects as a real value) and to the audio Processor.
+void VutuController::broadcastParam(Path pname, uint32_t flags)
+{
+  Value realVal = params_.getRealValueAtPath(pname);
+  sendMessageToActor(_processorName, {Path("set_param", pname), realVal, flags});
+  sendParamToView(*this, pname);
+}
+
+void VutuController::broadcastParams()
+{
+  for(const auto& paramDesc : params_.descriptions)
+  {
+    Path pname = textToPath(paramDesc->getTextProperty("name"));
+    broadcastParam(pname, 0);
+  }
 }
 
 VutuController::~VutuController()
@@ -43,15 +68,15 @@ VutuController::~VutuController()
 
 void VutuController::setButtonEnableStates()
 {
-  sendMessageToActor(_viewName, {"widget/play_source/set_prop/enabled", usable(&_sourceSample)});
-  sendMessageToActor(_viewName, {"widget/analyze/set_prop/enabled", usable(&_sourceSample)});
+  sendMessageToView({"widget/play_source/set_prop/enabled", usable(&_sourceSample)});
+  sendMessageToView({"widget/analyze/set_prop/enabled", usable(&_sourceSample)});
   
   bool partialsOK = _vutuPartials && (_vutuPartials->partials.size() > 0);
-  sendMessageToActor(_viewName, {"widget/synthesize/set_prop/enabled", partialsOK});
-  sendMessageToActor(_viewName, {"widget/export/set_prop/enabled", partialsOK});
+  sendMessageToView({"widget/synthesize/set_prop/enabled", partialsOK});
+  sendMessageToView({"widget/export/set_prop/enabled", partialsOK});
   
-  sendMessageToActor(_viewName, {"widget/play_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
-  sendMessageToActor(_viewName, {"widget/export_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
+  sendMessageToView({"widget/play_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
+  sendMessageToView({"widget/export_synth/set_prop/enabled", getSize(_synthesizedSample) > 0});
 }
 
 void VutuController::_debug()
@@ -63,16 +88,16 @@ void VutuController::_debug()
 
 void VutuController::_printToConsole(TextFragment t)
 {
-  sendMessageToActor(_viewName, {"info/set_prop/text", t});
+  sendMessageToView({"info/set_prop/text", t});
 }
 
 void VutuController::broadcastSourceSample()
 {
   // send synthesized audio to View and Processor
   ml::Sample* pSample = &_sourceSample;
-  Value samplePtrValue(&pSample, sizeof(ml::Sample*));
+  Value samplePtrValue(reinterpret_cast<const uint8_t*>(&pSample), sizeof(ml::Sample*));
   sendMessageToActor(_processorName, {"do/set_source_data", samplePtrValue});
-  sendMessageToActor(_viewName, {"do/set_source_data", samplePtrValue});
+  sendMessageToView({"do/set_source_data", samplePtrValue});
 }
 
 void VutuController::_clearPartialsData()
@@ -85,9 +110,9 @@ void VutuController::broadcastPartialsData()
 {
   // send Partials to View and Processor
   VutuPartialsData* pPartials = _vutuPartials.get();
-  Value partialsPtrValue(&pPartials, sizeof(VutuPartialsData*));
+  Value partialsPtrValue(reinterpret_cast<const uint8_t*>(&pPartials), sizeof(VutuPartialsData*));
   sendMessageToActor(_processorName, {"do/set_partials_data", partialsPtrValue});
-  sendMessageToActor(_viewName, {"do/set_partials_data", partialsPtrValue});
+  sendMessageToView({"do/set_partials_data", partialsPtrValue});
 
 }
 
@@ -100,13 +125,13 @@ void VutuController::broadcastSynthesizedSample()
 {
   // send synthesized audio to View and Processor
   ml::Sample* pSample = &_synthesizedSample;
-  Value samplePtrValue(&pSample, sizeof(ml::Sample*));
+  Value samplePtrValue(reinterpret_cast<const uint8_t*>(&pSample), sizeof(ml::Sample*));
   sendMessageToActor(_processorName, {"do/set_synth_data", samplePtrValue});
-  sendMessageToActor(_viewName, {"do/set_synth_data", samplePtrValue});
+  sendMessageToView({"do/set_synth_data", samplePtrValue});
 }
 
 
-int VutuController::saveSampleToWavFile(const Sample& sample, Path wavPath)
+int VutuController::saveSampleToWavFile(const Sample& sample, TextPath wavPath)
 {
   int OK{ false };
   std::cout << "saveSampleToWavFile: " << wavPath << "\n";
@@ -138,7 +163,7 @@ int VutuController::saveSampleToWavFile(const Sample& sample, Path wavPath)
   return OK;
 }
 
-int VutuController::loadSampleFromPath(Path samplePath)
+int VutuController::loadSampleFromPath(TextPath samplePath)
 {
   int OK{ false };
   File fileToLoad(samplePath);
@@ -192,7 +217,7 @@ int VutuController::loadSampleFromPath(Path samplePath)
         TextFragment framesMsg (textUtils::naturalNumberToText(framesRead), " frames read ");
         TextFragment secondsMsg ("(", textUtils::floatNumberToText((framesRead + 0.f)/sr, 2), " seconds) ");
         TextFragment sampleRate(" sr = ", textUtils::naturalNumberToText(_sourceSample.sampleRate));
-        TextFragment fileName = last(samplePath).getTextFragment();
+        TextFragment fileName = last(samplePath);
         readStatus = TextFragment(fileName, ": ", framesMsg, secondsMsg, truncatedMsg, sampleRate );
         OK = true;
       }
@@ -229,9 +254,9 @@ void VutuController::showAnalysisInfo()
 
   
   TextFragment a(p->sourceFile);
-  TextFragment b(" [", floatToText(p->stats.timeRange.mX1), " -- " ,floatToText(p->stats.timeRange.mX2), "] " );
+  TextFragment b(" [", floatToText(p->stats.timeRange.x1), " -- " ,floatToText(p->stats.timeRange.x2), "] " );
   TextFragment c("partials: ", intToText(p->stats.nPartials));
-  TextFragment d(" max freq: ", intToText(p->stats.freqRange.mX2));
+  TextFragment d(" max freq: ", intToText(p->stats.freqRange.x2));
   TextFragment e(" max active: ", intToText(p->stats.maxActivePartials));
 
   TextFragment out(a, b, c, d, e);
@@ -242,12 +267,12 @@ void VutuController::setAnalysisParamsFromPartials()
 {
   VutuPartialsData* p = _vutuPartials.get();
   
-  params.setFromRealValue("fundamental", p->fundamental);
+  params_.setFromRealValue("fundamental", p->fundamental);
   broadcastParam("fundamental", 0);
 
 }
 
-int VutuController::loadPartialsFromPath(Path partialsPath)
+int VutuController::loadPartialsFromPath(TextPath partialsPath)
 {
   int OK{ false };
   File fileToLoad(partialsPath);
@@ -300,7 +325,7 @@ TextFragment getFileDescription(TextFragment extension)
 }
 
 
-void VutuController::saveTextToPath(const TextFragment& text, Path savePath)
+void VutuController::saveTextToPath(const TextFragment& text, TextPath savePath)
 {
   if(!savePath) return;
   
@@ -325,17 +350,17 @@ int VutuController::analyzeSample()
   auto totalFrames = getFrames(_sourceSample);
   if(!totalFrames) return status;
   
-  auto interval = params.getRealValue("analysis_interval").getIntervalValue();
+  auto interval = valueToInterval(params_.getRealValue("analysis_interval"));
   auto frameInterval = interval*float(totalFrames);
   
-  int framesInInterval = frameInterval.mX2 - frameInterval.mX1;
+  int framesInInterval = frameInterval.x2 - frameInterval.x1;
   const float kFadeTime = 0.001f;
   int fadeSamples = kFadeTime*_sourceSample.sampleRate;
 
   // make a faded copy of the analysis interval
   std::vector< float > vx;
   vx.resize(framesInInterval);
-  int srcStart = frameInterval.mX1;
+  int srcStart = frameInterval.x1;
   for(int i=0; i<framesInInterval; ++i)
   {
     vx[i] = _sourceSample[srcStart + i];
@@ -358,13 +383,13 @@ int VutuController::analyzeSample()
 
   // set sample rate and configure analyzer
   int sr = _sourceSample.sampleRate;
-  auto res = params.getRealFloatValue("resolution");
-  auto width = params.getRealFloatValue("window_width");
-  auto drift = params.getRealFloatValue("freq_drift");
-  auto floor = params.getRealFloatValue("amp_floor");
-  auto loCut = params.getRealFloatValue("lo_cut");
-  auto hiCut = params.getRealFloatValue("hi_cut");
-  auto noiseWidth = params.getRealFloatValue("noise_width");
+  auto res = params_.getRealFloatValue("resolution");
+  auto width = params_.getRealFloatValue("window_width");
+  auto drift = params_.getRealFloatValue("freq_drift");
+  auto floor = params_.getRealFloatValue("amp_floor");
+  auto loCut = params_.getRealFloatValue("lo_cut");
+  auto hiCut = params_.getRealFloatValue("hi_cut");
+  auto noiseWidth = params_.getRealFloatValue("noise_width");
 
   utu::AnalyzerParams analyzerParams;
   analyzerParams.sampleRate = sr;
@@ -414,8 +439,8 @@ void VutuController::synthesize()
   const float kFadeTime = 0.001f;
 
   // get frames in analysis interval to use for output length. Length of synthesis will be shorter.
-  Interval analysisInterval = params.getRealValue("analysis_interval").getIntervalValue();
-  float duration = _vutuPartials->sourceDuration*(analysisInterval.mX2 -  analysisInterval.mX1);
+  Interval analysisInterval = valueToInterval(params_.getRealValue("analysis_interval"));
+  float duration = _vutuPartials->sourceDuration*(analysisInterval.x2 -  analysisInterval.x1);
   int framesAnalyzed = duration*kSampleRate;
 
   // run the synthesizer
@@ -477,7 +502,7 @@ void VutuController::onMessage(Message m)
     case(hash("set_param")):
     {
       Path whatParam = tail(addr);
-      params.setFromNormalizedValue(whatParam, m.value);
+      params_.setFromRealValue(whatParam, m.value);
       broadcastParam(whatParam, m.flags);
       break;
     }
@@ -488,12 +513,12 @@ void VutuController::onMessage(Message m)
       {
         case(hash("source_time")):
         {
-          sendMessageToActor(_viewName, {"widget/source/set_prop/playback_time", m.value});
+          sendMessageToView({"widget/source/set_prop/playback_time", m.value});
           break;
         }
         case(hash("synth_time")):
         {
-          sendMessageToActor(_viewName, {"widget/synth/set_prop/playback_time", m.value});
+          sendMessageToView({"widget/synth/set_prop/playback_time", m.value});
           break;
         }
       }
@@ -507,7 +532,7 @@ void VutuController::onMessage(Message m)
         {
           // load from saved origin or default
           // TODO make a function
-          Path loadOriginDir(recentSamplesInPath);
+          TextPath loadOriginDir(recentSamplesInPath);
 
           if(!loadOriginDir)
           {
@@ -531,7 +556,7 @@ void VutuController::onMessage(Message m)
           broadcastSynthesizedSample();
           setButtonEnableStates();
 
-          params.setValue("analysis_interval", Interval{0, 1});
+          params_.setValue("analysis_interval", intervalToValue(Interval{0, 1}));
           broadcastParam("analysis_interval", 0);
 
           messageHandled = true;
@@ -554,14 +579,14 @@ void VutuController::onMessage(Message m)
           // save synthesized audio to a file
           if(getSize(_synthesizedSample))
           {
-            File exportOriginDir(recentSamplesOutPath);
+            TextPath exportOriginDir(recentSamplesOutPath);
             if(!exportOriginDir)
             {
               exportOriginDir = FileUtils::getUserDataPath();
             }
 
             auto shortName = textUtils::stripExtension(sourceFileLoaded.getShortName());
-            auto savePath = FileDialog::getFilePathForSave(exportOriginDir.getFullPath(), TextFragment(shortName, ".wav"));
+            auto savePath = FileDialog::getFilePathForSave(exportOriginDir, TextFragment(shortName, ".wav"));
             if(savePath)
             {
               recentSamplesOutPath = savePath;
@@ -606,12 +631,12 @@ void VutuController::onMessage(Message m)
           {
             case(hash("source")):
             {
-              sendMessageToActor(_viewName, {"widget/play_source/set_prop/text", TextFragment("stop")});
+              sendMessageToView({"widget/play_source/set_prop/text", TextFragment("stop")});
               break;
             }
             case(hash("synth")):
             {
-              sendMessageToActor(_viewName, {"widget/play_synth/set_prop/text", TextFragment("stop")});
+              sendMessageToView({"widget/play_synth/set_prop/text", TextFragment("stop")});
               break;
             }
           }
@@ -621,9 +646,9 @@ void VutuController::onMessage(Message m)
         case(hash("playback_stopped")):
         {
           // switch play button texts
-          sendMessageToActor(_viewName, {"widget/play_source/set_prop/text", TextFragment("play")});
-          sendMessageToActor(_viewName, {"widget/play_synth/set_prop/text", TextFragment("play")});
-          sendMessageToActor(_viewName, {"widget/sample/set_prop/playback_time", 0.f});
+          sendMessageToView({"widget/play_source/set_prop/text", TextFragment("play")});
+          sendMessageToView({"widget/play_synth/set_prop/text", TextFragment("play")});
+          sendMessageToView({"widget/sample/set_prop/playback_time", 0.f});
           messageHandled = true;
           break;
         }
@@ -635,7 +660,7 @@ void VutuController::onMessage(Message m)
           if(partialsOK)
           {
             
-            Path exportOriginDir(recentPartialsOutPath);
+            TextPath exportOriginDir(recentPartialsOutPath);
             if(!exportOriginDir)
             {
               exportOriginDir = FileUtils::getApplicationDataPath(getMakerName(), "Vutu", "");
@@ -646,12 +671,12 @@ void VutuController::onMessage(Message m)
             auto savePath = FileDialog::getFilePathForSave(exportOriginDir, TextFragment(shortName, ".utu"));
             if(savePath)
             {
-              auto ext = getExtensionFromPath(savePath);
+              auto ext = FileUtils::getExtensionFromPath(savePath);
 
               if(ext == "utu")
               {
                 // tuck current fundamental param value into partials data
-                pPartials->fundamental = params.getRealFloatValue("fundamental");
+                pPartials->fundamental = params_.getRealFloatValue("fundamental");
                 
                 auto partialsJson = vutuPartialsToJSON(*pPartials);
                 auto partialsText = JSONToText(partialsJson);
@@ -668,7 +693,7 @@ void VutuController::onMessage(Message m)
         }
         case(hash("import")):
         {
-          Path importOriginDir(recentPartialsInPath);
+          TextPath importOriginDir(recentPartialsInPath);
           if (!importOriginDir)
           {
               importOriginDir = FileUtils::getApplicationDataPath(getMakerName(), "Vutu", "");
@@ -695,7 +720,7 @@ void VutuController::onMessage(Message m)
               
               
               // set interval to whole partials file and broadcast
-              params.setValue("analysis_interval", Interval{0, 1});
+              params_.setValue("analysis_interval", intervalToValue(Interval{0, 1}));
               broadcastParam("analysis_interval", 0);
             }
           }
@@ -715,10 +740,9 @@ void VutuController::onMessage(Message m)
       break;
     }
   }
-  
-  if(!messageHandled)
-  {
-    AppController::onMessage(m);
-  }
+
+  // messages we don't handle are simply ignored (there is no base-class
+  // onMessage now that AppController is gone).
+  (void)messageHandled;
 }
 

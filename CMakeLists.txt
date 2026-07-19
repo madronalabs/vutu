@@ -88,24 +88,13 @@ endif()
 set(manzanita_NAME manzanita$<$<CONFIG:Debug>:-debug>)
 
 #--------------------------------------------------------------------
-# find mlvg library
+# fetch SDL2 from source (matches the manzanita test app)
 #--------------------------------------------------------------------
 
-if(APPLE)
-   include(GNUInstallDirs)
-   set (MLVG_INCLUDE_DIR "${CMAKE_INSTALL_FULL_INCLUDEDIR}/mlvg")
-   set (MLVG_LIBRARY_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
-elseif(WIN32)
-   set (MLVG_INCLUDE_DIR "C:/Program Files/mlvg/include")
-   set (MLVG_LIBRARY_DIR "C:/Program Files/mlvg/lib")
-else()
-endif()
-
-# add -debug suffix to link debug library for debug builds
-set(mlvg_NAME mlvg$<$<CONFIG:Debug>:-debug>)
-
-message("mlvg headers should be in: " ${MLVG_INCLUDE_DIR} )
-message("mlvg library should be at: " ${MLVG_LIBRARY_DIR}/${mlvg_NAME} )
+include(FetchContent)
+FetchContent_Declare(SDL2
+  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+  GIT_TAG a5f445dba181740c541ff9a5b93fd80d1470cd06)
 
 #--------------------------------------------------------------------
 # compile binary resources
@@ -186,7 +175,7 @@ add_library(${target} STATIC ${LIBRESAMPLE_SOURCES})
 target_include_directories(${target} PUBLIC ${LIBRESAMPLE_INCLUDES})
 
 #--------------------------------------------------------------------
-# make mlvg /SDL2 application target 
+# make manzanita / SDL2 application target
 #--------------------------------------------------------------------
 
 set(target Vutu)
@@ -229,29 +218,10 @@ endif()
 
 add_executable(${target} WIN32 ${vutu_ICON} ${app_sources})
 
-target_compile_definitions(${target} PRIVATE ML_INCLUDE_SDL=1)
-
-# find SDL headers and libraries
-if(APPLE)
-    # to use the SDL2 framework in /Library/Frameworks, do this:
-    find_package(SDL2 COMPONENTS SDL2)
-    if(NOT SDL2_FOUND)
-        message(WARNING "SDL2 not found: the Vutu app target will not build. "
-                        "utucompare and other non-app targets are unaffected.")
-    endif()
-elseif(WIN32)
-        # it seems like there's no standard place to put the SDL dev tools on Windows.
-        # we put them in an SDL dir alongside the main project directory.
-        set(SDL2_INCLUDE_DIRS "${CMAKE_CURRENT_LIST_DIR}/../SDL/include")
-
-        # Support 64 bit builds
-        set(SDL2_LIBRARIES_DIR "${CMAKE_CURRENT_LIST_DIR}/../SDL/VisualC/x64/Release")
-endif()
-message("SDL2 headers should be in: " ${SDL2_INCLUDE_DIRS} )
-message("SDL2 libraries should be in: " ${SDL2_LIBRARIES_DIR} )
-target_include_directories(${target} PRIVATE ${SDL2_INCLUDE_DIRS})
-target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2.lib")
-target_link_libraries(${target} PRIVATE "${SDL2_LIBRARIES_DIR}/SDL2main.lib")
+# fetch and build SDL2 from source, then link it
+FetchContent_MakeAvailable(SDL2)
+target_link_libraries(${target} PRIVATE SDL2::SDL2)
+target_include_directories(${target} PRIVATE ${SDL2_SOURCE_DIR}/include)
 
 # add include dirs
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source" )
@@ -264,30 +234,22 @@ target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/extern
 target_include_directories(${target} PRIVATE  "${CMAKE_SOURCE_DIR}/source/widgets" )
 
 
-# add madronalib library
-target_include_directories(${target} PRIVATE ${MADRONALIB_INCLUDE_DIR})
-if(APPLE)
-    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")   
-elseif(WIN32)
-    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
-endif()
-
-# add manzanita library
+# add manzanita library (must be linked before madronalib)
 target_include_directories(${target} PRIVATE ${MANZANITA_INCLUDE_DIR})
+target_include_directories(${target} PRIVATE ${MANZANITA_INCLUDE_DIR}/native)
 if(APPLE)
     target_link_libraries(${target} PRIVATE "${MANZANITA_LIBRARY_DIR}/lib${manzanita_NAME}.a")
 elseif(WIN32)
     target_link_libraries(${target} PRIVATE "${MANZANITA_LIBRARY_DIR}/${manzanita_NAME}.lib")
 endif()
 
-# add mlvg library
-target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
+# add madronalib library (linked after manzanita)
+target_include_directories(${target} PRIVATE ${MADRONALIB_INCLUDE_DIR})
 if(APPLE)
-    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/lib${mlvg_NAME}.a")
+    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")
 elseif(WIN32)
-    target_link_libraries(${target} PRIVATE "${MLVG_LIBRARY_DIR}/${mlvg_NAME}.lib")
+    target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/${madronalib_NAME}.lib")
 endif()
-target_include_directories(${target} PRIVATE ${MLVG_INCLUDE_DIR})
 
 # add other external libraries
 target_link_libraries(${target} PRIVATE SndFile::sndfile libresample)
@@ -375,12 +337,8 @@ target_compile_definitions(${target} PUBLIC "$<$<CONFIG:RELEASE>:NDEBUG>")
 # "other linker flags" in XCode and not in its file browser
 if(APPLE)
     target_link_libraries(${target} PRIVATE "-framework Cocoa" "-framework Metal" "-framework MetalKit"
-      "-framework CoreAudio" "-framework AppKit" "-framework SDL2" )
-     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")  
-     
-     # add SDL2 framework location to @runpath 
-     set_target_properties( ${target} PROPERTIES
-        XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS "@loader_path/../Frameworks")
+      "-framework CoreAudio" "-framework AppKit" )
+     target_link_libraries(${target} PRIVATE "${MADRONALIB_LIBRARY_DIR}/lib${madronalib_NAME}.a")
 
 elseif(WIN32)
         find_package(OpenGL REQUIRED)
@@ -393,36 +351,6 @@ elseif(WIN32)
         target_link_libraries(${target} PRIVATE debug "msvcrtd.lib" optimized "msvcrt.lib")
 endif()
 
-# for Mac OS copy SDL2.framework into bundle and codesign it
-if(APPLE)
-
-  set(APP_BUNDLE ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Vutu.app)
-  
-  # Mac OS Monterey, XCode 14.0
-  # set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/build/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
-    
-  # Mac OS Ventura, XCode 14.2 - looks like they changed the .xcent location
-  set(ENTITLEMENTS ${CMAKE_CURRENT_BINARY_DIR}/${target}.build/$<CONFIG>/${target}.build/${target}.app.xcent)
-    
-  message("ENTITLEMENTS: " ${ENTITLEMENTS})
-
-  # source location of the SDL2 framework. Get the latest dmg from
-  # https://github.com/libsdl-org/SDL/releases and copy the .framework
-  # to this location.
-  SET(FRAMEWORK "/Library/Frameworks/SDL2.framework")
-  
-  add_custom_command(
-     TARGET ${target}
-     POST_BUILD
-     COMMAND ditto
-         "${FRAMEWORK}"
-         "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework"
-  )
-
-  # Add build target for codesigning the framework bundle
-  add_custom_command(TARGET ${target}
-      POST_BUILD
-      COMMAND codesign --force --sign "-" --entitlements ${ENTITLEMENTS} "${APP_BUNDLE}/Contents/Frameworks/SDL2.framework/Versions/A"
-  )
-endif()
+# NOTE: SDL2 is now statically linked via FetchContent (SDL2::SDL2), so there is
+# no SDL2.framework to copy into the bundle or codesign.
 

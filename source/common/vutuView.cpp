@@ -5,13 +5,7 @@
 #include "vutuView.h"
 
 #include "madronalib.h"
-
-#include "MLDialBasic.h"
-#include "MLTextButtonBasic.h"
-#include "MLResizer.h"
-#include "MLTextLabelBasic.h"
-#include "MLSVGImage.h"
-#include "MLSVGButtonBasic.h"
+#include "manzanita.h"
 
 #include "MLParameters.h"
 #include "MLSerialization.h"
@@ -23,6 +17,12 @@
 
 #include "../build/resources/vutu/resources.c"
 
+#include "SDL.h"
+#include "SDL_syswm.h"
+
+using namespace ml;
+
+static int targetFPS{ 60 };
 
 ml::Rect smallDialRect{0, 0, 1.0, 1.0};
 ml::Rect mediumDialRect{0, 0, 2.0, 1.5};
@@ -31,30 +31,95 @@ float mediumDialSize{0.625f};
 float largeDialSize{0.875f};
 ml::Rect labelRect(0, 0, 3, 1.0);
 
-VutuView::VutuView(TextFragment appName, size_t instanceNum) :
-  AppView(appName, instanceNum)
+VutuView::VutuView() : AppView()
 {
-  Actor::start();
-  std::cout << "VutuView: " << appName << " " << instanceNum << "\n";
-
-  // set initial size and limits
-  setSizeInGridUnits(kDefaultGridUnits);
-  setMinSizeInGridUnits(kDefaultGridUnits);
-  setGridSizeDefault(kDefaultGridUnitSize);
 }
 
 VutuView::~VutuView ()
 {
+  if(window)
+  {
+    SDL_DestroyWindow(window);
+  }
+  SDL_Quit();
+}
+
+#pragma mark windowing
+
+bool VutuView::createWindow(ml::Rect defaultSize)
+{
+  int windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE;
+
+  window = ml::newSDLWindow(defaultSize, "vutu", windowFlags);
+  if(!window)
+  {
+    std::cout << "newSDLWindow failed!\n";
+    return false;
+  }
+
+  // this is not a fixed-ratio app: the window sizes freely and the grid unit
+  // size remains constant.
+  setGridSizeDefault(kDefaultGridUnitSize);
+
+  ParentWindowInfo windowInfo = ml::getParentWindowInfo(window);
+  platformView = std::make_unique< PlatformView >("vutu", windowInfo.windowPtr, this, nullptr, windowInfo.flags, targetFPS, windowInfo.sdlWindow);
+
+  // watch for window resize events during drag
+  watcherData = ResizingEventWatcherData{ window, platformView.get() };
+  SDL_AddEventWatch(resizingEventWatcher, &watcherData);
+
+  return true;
+}
+
+void VutuView::attachPlatformViewToParent()
+{
+  platformView->attachViewToParent();
+}
+
+void VutuView::initializePlatformResources()
+{
+  initializeResources(platformView->getNativeDrawContext());
+}
+
+void VutuView::runAppLoop()
+{
+  bool doneFlag{ false };
+  while (!doneFlag)
+  {
+    SDLAppLoop(window, &doneFlag);
+  }
+}
+
+void VutuView::stop()
+{
+  stopTimers();
+  clearResources();
+}
+
+void VutuView::requestResize(Vec2 newSize)
+{
+  if (window)
+  {
+    SDL_SetWindowSize(window, newSize[0], newSize[1]);
+  }
+}
+
+void VutuView::onResize(Vec2 newSize)
+{
+  setDirty(true);
 }
 
 #pragma mark from ml::AppView
 
 void VutuView::layoutView(DrawContext dc)
 {
-  Vec2 gridDims = getSizeInGridUnits();
-  int gx = gridDims.x();
-  int gy = gridDims.y();
-  
+  // this app sizes freely, so derive the grid dimensions from the current
+  // view size rather than a fixed grid-units property.
+  Vec2 pixelSize = dc.coords.viewSizeInPixels;
+  float gridSize = dc.coords.gridSizeInPixels;
+  int gx = pixelSize.x() / gridSize;
+  int gy = pixelSize.y() / gridSize;
+
   // set grid size of entire view, for background and other drawing
   _view->setProperty("grid_units_x", gx);
   _view->setProperty("grid_units_y", gy);
@@ -67,28 +132,28 @@ void VutuView::layoutView(DrawContext dc)
   float dialsY2 = bottomY + 5;
   
   // left dials
-  _view->_widgets["resolution"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {2.0, dialsY1}));
-  _view->_widgets["amp_floor"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {3.5, dialsY2}));
-  _view->_widgets["window_width"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {5.0, dialsY1}));
+  _view->_widgets["resolution"]->setBounds(alignCenterToPoint(largeDialRect, {2.0, dialsY1}));
+  _view->_widgets["amp_floor"]->setBounds(alignCenterToPoint(largeDialRect, {3.5, dialsY2}));
+  _view->_widgets["window_width"]->setBounds(alignCenterToPoint(largeDialRect, {5.0, dialsY1}));
   
-  _view->_widgets["lo_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {6.5, dialsY2}));
-  _view->_widgets["hi_cut"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {8, dialsY1}));
+  _view->_widgets["lo_cut"]->setBounds(alignCenterToPoint(largeDialRect, {6.5, dialsY2}));
+  _view->_widgets["hi_cut"]->setBounds(alignCenterToPoint(largeDialRect, {8, dialsY1}));
   
-  _view->_widgets["freq_drift"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {9.5, dialsY2}));
-  _view->_widgets["noise_width"]->setRectProperty("bounds", alignCenterToPoint(largeDialRect, {11, dialsY1}));
+  _view->_widgets["freq_drift"]->setBounds(alignCenterToPoint(largeDialRect, {9.5, dialsY2}));
+  _view->_widgets["noise_width"]->setBounds(alignCenterToPoint(largeDialRect, {11, dialsY1}));
   
   // right dials
-  _view->_widgets["fundamental"]->setRectProperty("bounds", alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 1.5f}));
-  _view->_widgets["test_volume"]->setRectProperty("bounds", alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 3.5f}));
-  _view->_widgets["output_volume"]->setRectProperty("bounds", alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 5.5f}));
+  _view->_widgets["fundamental"]->setBounds(alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 1.5f}));
+  _view->_widgets["test_volume"]->setBounds(alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 3.5f}));
+  _view->_widgets["output_volume"]->setBounds(alignCenterToPoint(mediumDialRect, {gx - 2.f, bottomY + 5.5f}));
 
   // dial labels
   auto positionLabelUnderDial = [&](Path dialName)
   {
     Path labelName (TextFragment(pathToText(dialName), "_label"));
-    ml::Rect dialRect = _view->_widgets[dialName]->getRectProperty("bounds");
-    _view->_backgroundWidgets[labelName]->setRectProperty
-    ("bounds", alignTopCenterToPoint(labelRect, dialRect.bottomCenter() - Vec2(0, 0.5)));
+    ml::Rect dialRect = _view->_widgets[dialName]->getBounds();
+    _view->_backgroundWidgets[labelName]->setBounds
+    (alignTopCenterToPoint(labelRect, dialRect.bottomCenter() - Vec2(0, 0.5)));
   };
   for(auto dialName : {"resolution", "window_width", "amp_floor", "lo_cut", "hi_cut", "noise_width", "freq_drift", "fundamental", "test_volume", "output_volume"})
   {
@@ -96,13 +161,13 @@ void VutuView::layoutView(DrawContext dc)
   }
   
   // info: whole width
-  _view->_widgets["info"]->setRectProperty("bounds", ml::Rect(0, bottomY, gx, 1));
+  _view->_widgets["info"]->setBounds(ml::Rect(0, bottomY, gx, 1));
   
   // audio display widgets
   int bigWidth = gx;
-  _view->_widgets["source"]->setRectProperty("bounds", ml::Rect(0, 0, bigWidth, 2));
-  _view->_widgets["partials"]->setRectProperty("bounds", ml::Rect(0, 2, bigWidth, bottomY - 4));
-  _view->_widgets["synth"]->setRectProperty("bounds", ml::Rect(0, bottomY - 2, bigWidth, 2));
+  _view->_widgets["source"]->setBounds(ml::Rect(0, 0, bigWidth, 2));
+  _view->_widgets["partials"]->setBounds(ml::Rect(0, 2, bigWidth, bottomY - 4));
+  _view->_widgets["synth"]->setBounds(ml::Rect(0, bottomY - 2, bigWidth, 2));
 
   // buttons
   int centerX = gx/2;
@@ -121,23 +186,23 @@ void VutuView::layoutView(DrawContext dc)
   float buttonsX2 = gx - 4 - halfButtonWidth - buttonWidth*1;
   float buttonsX3 = gx - 4 - halfButtonWidth - buttonWidth*0;
   
-  _view->_widgets["open"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX1, buttonsY1}));
-  _view->_widgets["analyze"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX2, buttonsY1}));
-  _view->_widgets["play_source"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX3, buttonsY1}));
+  _view->_widgets["open"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX1, buttonsY1}));
+  _view->_widgets["analyze"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX2, buttonsY1}));
+  _view->_widgets["play_source"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX3, buttonsY1}));
     
-  _view->_widgets["import"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX1, buttonsY2}));
-  _view->_widgets["synthesize"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX2, buttonsY2}));
-  _view->_widgets["export"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX3, buttonsY2}));
+  _view->_widgets["import"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX1, buttonsY2}));
+  _view->_widgets["synthesize"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX2, buttonsY2}));
+  _view->_widgets["export"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX3, buttonsY2}));
 
-  _view->_widgets["play_synth"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX1, buttonsY3}));
-  _view->_widgets["export_synth"]->setRectProperty("bounds", alignCenterToPoint(textButtonRect, {buttonsX2, buttonsY3}));
+  _view->_widgets["play_synth"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX1, buttonsY3}));
+  _view->_widgets["export_synth"]->setBounds(alignCenterToPoint(textButtonRect, {buttonsX2, buttonsY3}));
   
   // other labels
   ml::Rect otherLabelsRect(0, 0, 2, 1);
   float labelsR = buttonsX1 - halfButtonWidth -  0.25;
-  _view->_backgroundWidgets["source_label"]->setRectProperty("bounds", alignMiddleRightToPoint(otherLabelsRect, {labelsR, buttonsY1}));
-  _view->_backgroundWidgets["partials_label"]->setRectProperty("bounds", alignMiddleRightToPoint(otherLabelsRect, {labelsR, buttonsY2}));
-  _view->_backgroundWidgets["resynth_label"]->setRectProperty("bounds", alignMiddleRightToPoint(otherLabelsRect, {labelsR, buttonsY3}));
+  _view->_backgroundWidgets["source_label"]->setBounds(alignMiddleRightToPoint(otherLabelsRect, {labelsR, buttonsY1}));
+  _view->_backgroundWidgets["partials_label"]->setBounds(alignMiddleRightToPoint(otherLabelsRect, {labelsR, buttonsY2}));
+  _view->_backgroundWidgets["resynth_label"]->setBounds(alignMiddleRightToPoint(otherLabelsRect, {labelsR, buttonsY3}));
 
   
   
@@ -152,33 +217,39 @@ void VutuView::layoutView(DrawContext dc)
 
 void VutuView::initializeResources(NativeDrawContext* nvg)
 {
+  if (!nvg) return;
+
   // initialize drawing properties before controls are made
-  _drawingProperties.setProperty("mark", colorToMatrix({0.01, 1.00, 0.01, 1.0}));
-  _drawingProperties.setProperty("background", colorToMatrix({0.01, 0.01, 0.01, 1.0}));
-  _drawingProperties.setProperty("panel_bg", colorToMatrix({0.01, 0.01, 0.01, 1.0}));
+  _drawingProperties.setProperty("mark", {0.01, 1.00, 0.01, 1.0});
+  _drawingProperties.setProperty("background", {0.01, 0.01, 0.01, 1.0});
+  _drawingProperties.setProperty("panel_bg", {0.01, 0.01, 0.01, 1.0});
   _drawingProperties.setProperty("common_stroke_width", 1/24.f);
-  _drawingProperties.setProperty("partials", colorToMatrix({0.01, 1.00, 0.01, 1.0}));
+  _drawingProperties.setProperty("partials", {0.01, 1.00, 0.01, 1.0});
 
   // DEBUG
   _drawingProperties.setProperty("draw_widget_bounds", false);
   _drawingProperties.setProperty("draw_widget_outlines", false);
-  
-  if (nvg)
-  {
-      // fonts
-      _resources.fonts["d_din"] = std::make_unique< FontResource >(nvg, "MLVG_sans", resources::D_DIN_otf, resources::D_DIN_otf_size);
-      _resources.fonts["d_din_oblique"] = std::make_unique< FontResource >(nvg, "MLVG_italic", resources::D_DIN_Italic_otf, resources::D_DIN_Italic_otf_size);
-  }
+
+  // fonts
+  _resources.fonts["d_din"] = std::make_unique< FontResource >(nvg, "MZ_sans", resources::D_DIN_otf, resources::D_DIN_otf_size);
+  _resources.fonts["d_din_oblique"] = std::make_unique< FontResource >(nvg, "MZ_italic", resources::D_DIN_Italic_otf, resources::D_DIN_Italic_otf_size);
+}
+
+void VutuView::clearResources()
+{
+  _resources.fonts.clear();
+  _resources.rasterImages.clear();
+  _resources.vectorImages.clear();
+  _resources.drawableImages.clear();
 }
 
 
-void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
+void VutuView::makeWidgets()
 {
   // add labels to background
   auto addControlLabel = [&](Path name, TextFragment t)
   {
     _view->_backgroundWidgets.add_unique< TextLabelBasic >(name, WithValues{
-      { "bounds", rectToMatrix(labelRect) },
       { "h_align", "center" },
       { "v_align", "middle" },
       { "text", t },
@@ -201,7 +272,6 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   auto addOtherLabel = [&](Path name, TextFragment t)
   {
     _view->_backgroundWidgets.add_unique< TextLabelBasic >(name, WithValues{
-      { "bounds", rectToMatrix(labelRect) },
       { "h_align", "right" },
       { "v_align", "middle" },
       { "text", t },
@@ -336,22 +406,18 @@ void VutuView::makeWidgets(const ParameterDescriptionList& pdl)
   } );
   
 
-  // make all the above Widgets visible
-  forEach< Widget >
-  (_view->_widgets, [&](Widget& w)
-   {
-    w.setProperty("visible", true);
-  }
-   );
-  
   // play buttons disabled until we have a sample
   _view->_widgets["play_source"]->setProperty("enabled", false);
   _view->_widgets["analyze"]->setProperty("enabled", false);
   _view->_widgets["export"]->setProperty("enabled", false);
   _view->_widgets["play_synth"]->setProperty("enabled", false);
   _view->_widgets["export_synth"]->setProperty("enabled", false);
+}
 
-  _setupWidgets(pdl);
+// after Widgets are made and parameters connected, make everything visible.
+void VutuView::prepareToDraw()
+{
+  showAllWidgets();
 }
 
 
@@ -364,44 +430,17 @@ void VutuView::debug()
 }
 */
 
-// Actor implementation
-
+// handle messages arriving from the controller (via the view message handler)
+// and from our own Widgets (via processGUIEvent). Both flow through here.
 void VutuView::onMessage(Message msg)
 {
-  if(head(msg.address) == "editor")
-  {
-    // we are the editor, so remove "editor" and handle message
-    msg.address = tail(msg.address);
-  }
-  
   switch(hash(head(msg.address)))
   {
     case(hash("set_param")):
     {
-      switch(hash(second(msg.address)))
-      {
-        default:
-        {
-          // no local parameter was found, set a plugin parameter
-          
-          // store param value in local tree.
-          Path paramName = tail(msg.address);
-          _params.setFromNormalizedValue(paramName, msg.value);
-          
-          // if the parameter change message is not from the controller,
-          // forward it to the controller.
-          if(!(msg.flags & kMsgFromController))
-          {
-            sendMessageToActor(_controllerName, msg);
-          }
-          
-          // if the message comes from a Widget, we do send the parameter back
-          // to other Widgets so they can synchronize. It's up to individual
-          // Widgets to filter out duplicate values.
-          _sendParameterMessageToWidgets(msg);
-        }
-        break;
-      }
+      // let the base AppView update the bound Widgets and forward
+      // widget-originated changes on to the processor (the controller).
+      AppView::onMessage(msg);
       break;
     }
     case(hash("do")):
@@ -410,87 +449,68 @@ void VutuView::onMessage(Message msg)
       {
         case(hash("set_source_data")):
         {
-          // get Sample pointer
-          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
-          _view->_widgets["source"]->receiveNamedRawPointer("sample", pSample);
-          
+          Sample* pSample = *reinterpret_cast<Sample* const*>(msg.value.data());
+          if(auto* w = dynamic_cast< SampleDisplay* >(_view->_widgets["source"].get()))
+            w->receiveSample(pSample);
           break;
         }
-          
+
         case(hash("set_partials_data")):
         {
-          // get Partials data pointer
-          VutuPartialsData* pPartials = *reinterpret_cast<VutuPartialsData**>(msg.value.getBlobValue());
-          _view->_widgets["partials"]->receiveNamedRawPointer("partials", pPartials);
-          
+          VutuPartialsData* pPartials = *reinterpret_cast<VutuPartialsData* const*>(msg.value.data());
+          if(auto* w = dynamic_cast< VutuPartialsDisplay* >(_view->_widgets["partials"].get()))
+            w->receivePartials(pPartials);
           break;
         }
-          
+
         case(hash("set_synth_data")):
         {
-          // get Sample pointer
-          Sample* pSample = *reinterpret_cast<Sample**>(msg.value.getBlobValue());
-          _view->_widgets["synth"]->receiveNamedRawPointer("sample", pSample);
-          
+          Sample* pSample = *reinterpret_cast<Sample* const*>(msg.value.data());
+          if(auto* w = dynamic_cast< SampleDisplay* >(_view->_widgets["synth"].get()))
+            w->receiveSample(pSample);
           break;
         }
-          
+
         case(hash("set_source_duration")):
         {
-          Message intervalStartMsg{"set_prop/interval_start", 0};
-          Message intervalEndMsg{"set_prop/interval_end", msg.value.getFloatValue()};
-          sendMessage(_view->_widgets["source"], intervalStartMsg);
-          sendMessage(_view->_widgets["source"], intervalEndMsg);
-
+          if(const auto& w = _view->_widgets["source"])
+          {
+            w->handleMessage(Message{"set_prop/interval_start", 0}, nullptr);
+            w->handleMessage(Message{"set_prop/interval_end", msg.value.getFloatValue()}, nullptr);
+          }
           break;
         }
 
-          
         default:
         {
-          // if the message is not from the controller,
-          // forward it to the controller.
-          if(!(msg.flags & kMsgFromController))
+          // a button action (do/open, do/analyze, ...) originating from a
+          // Widget: forward it to the processor (the controller).
+          if(!(msg.flags & kMsgFromProcessor) && sendMessageToProcessor)
           {
-            sendMessageToActor(_controllerName, msg);
+            sendMessageToProcessor(msg);
           }
           break;
         }
       }
       break;
     }
+    case(hash("info")):
+    {
+      msg.address = tail(msg.address);
+      if(const auto& w = _view->_widgets["info"]) w->handleMessage(msg, nullptr);
+      break;
+    }
+    case(hash("widget")):
+    {
+      msg.address = tail(msg.address);
+      auto widgetName = head(msg.address);
+      msg.address = tail(msg.address);
+      if(const auto& w = _view->_widgets[Path(widgetName.getTextFragment())]) w->handleMessage(msg, nullptr);
+      break;
+    }
     default:
     {
-      // try to forward the message to another receiver
-      switch(hash(head(msg.address)))
-      {
-        case(hash("info")):
-        {
-          msg.address = tail(msg.address);
-          sendMessage(_view->_widgets["info"], msg);
-          break;
-        }
-        case(hash("controller")):
-        {
-          msg.address = tail(msg.address);
-          sendMessageToActor(_controllerName, msg);
-          break;
-        }
-        case(hash("widget")):
-        {
-          
-          msg.address = tail(msg.address);
-          auto widgetName = head(msg.address);
-          msg.address = tail(msg.address);          
-          sendMessage(_view->_widgets[widgetName], msg);
-          break;
-        }
-        default:
-        {
-          // uncaught
-          break;
-        }
-      }
+      // uncaught
       break;
     }
   }
