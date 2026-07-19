@@ -42,6 +42,9 @@ public:
   MessageList animate(int elapsedTimeInMs, ml::DrawContext dc) override;
   void draw(ml::DrawContext d) override;
 
+  // release the backing-layer framebuffer while the draw context is still alive.
+  void clearResources() override { _backingLayer.reset(); }
+
   // receive a pointer to the partials this widget displays (called by the View).
   void receivePartials(const VutuPartialsData* p);
 

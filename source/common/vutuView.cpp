@@ -237,6 +237,10 @@ void VutuView::initializeResources(NativeDrawContext* nvg)
 
 void VutuView::clearResources()
 {
+  // release widget-owned framebuffers (backing layers) while the draw context
+  // is still alive, before clearing our own resources.
+  clearWidgetResources();
+
   _resources.fonts.clear();
   _resources.rasterImages.clear();
   _resources.vectorImages.clear();

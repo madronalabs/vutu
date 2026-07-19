@@ -49,6 +49,9 @@ public:
   void draw(ml::DrawContext d) override;
   MessageList processGUIEvent(const GUICoordinates& gc, GUIEvent e) override;
 
+  // release the backing-layer framebuffer while the draw context is still alive.
+  void clearResources() override { _backingLayer.reset(); }
+
   // receive a pointer to the sample this widget displays (called by the View).
   void receiveSample(const ml::Sample* p);
 
